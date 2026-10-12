@@ -1,4 +1,6 @@
-# NaturalHealing
+# EasyTesting
+
+*(Formerly NaturalHealing. The command line is `easytesting`; the older `heal` command still works.)*
 
 A self-healing locator engine for end-to-end tests. When a test cannot find an element because a release changed it, the engine finds the closest match on the page, retries, and proposes (or, at high confidence, applies) a fix to the test source.
 
@@ -49,7 +51,7 @@ healer.finish('save profile', passed); // in afterEach
 Selectors are CSS, or XPath when they start with `/` or `(`. With Mocha:
 
 ```js
-import { SeleniumHealer } from 'naturalhealing/selenium';
+import { SeleniumHealer } from 'easytesting/selenium';
 
 const healer = new SeleniumHealer();
 beforeEach(function () { healer.beginTest(this.currentTest.title); });
@@ -72,7 +74,7 @@ Only heals whose test then passed are applied. Heals below the auto level are ap
 npm run serve        # accounts are on by default; --no-login for solo use on your own machine
 ```
 
-The first person to open the app creates the admin account and adds everyone else (**Team**). Passwords are hashed with scrypt, sessions are HttpOnly SameSite=Strict cookies, and each tester sees only their own runs, bugs and test cases. Everything is stored in SQLite files under `.heal-server/` (`app.db` plus one `fingerprints.db` per project); old JSON data is imported on first start.
+The first person to open the app creates the admin account and adds everyone else (**Team**). To let people create their own tester accounts instead, start it with `--signup` (or `HEAL_SIGNUP=on`): the sign-in screen then has a **Create account** tab, and the landing page's **Get started** and **Sign in** buttons link to `#/signup` and `#/signin`. Passwords are hashed with scrypt, sessions are HttpOnly SameSite=Strict cookies, and each tester sees only their own runs, bugs and test cases. Everything is stored in SQLite files under `.heal-server/` (`app.db` plus one `fingerprints.db` per project); old JSON data is imported on first start.
 
 Three ways in from the home page:
 

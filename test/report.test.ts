@@ -161,7 +161,7 @@ describe('the report for the demo, across a release and a fix', () => {
     const r3 = await demo('3');
     const fixed = await call(`/api/runs/${r3}/report`);
     assert.equal(fixed.summary.failed, 0);
-    assert.equal(fixed.bugs[0].status, 'verified');
+    assert.equal(fixed.bugs[0].status, 'verified', 'evidence: ' + JSON.stringify({ summary: fixed.summary, tests: fixed.tests.map((t: any) => [t.title, t.status, t.file]), note: fixed.resultsNote, bug: fixed.bugs[0] }));
     assert.equal(fixed.bugs[0].retest.result, 'passed');
     assert.equal(fixed.retest.verified, 1);
     assert.equal(fixed.density.residual, 0);

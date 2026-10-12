@@ -1,6 +1,6 @@
 # docker compose up -d --build     then open http://localhost:8080 and create the first (admin) account.
 services:
-  natural-healing:
+  easytesting:
     build: .
     ports:
       - "8080:8080"
@@ -11,6 +11,8 @@ services:
       HEAL_MAX_RUNS: ${HEAL_MAX_RUNS:-3}
       # Set to 1 when the app is served over HTTPS (behind a proxy); makes the sign-in cookie Secure.
       HEAL_HTTPS: ${HEAL_HTTPS:-0}
+      # "on" lets anyone create their own account (the landing page's Get started button). Off: only an admin adds people.
+      HEAL_SIGNUP: ${HEAL_SIGNUP:-off}
       # "on" lets people upload Playwright/Selenium projects, which run code on this machine. Leave off on a shared server.
       HEAL_CODE_UPLOADS: ${HEAL_CODE_UPLOADS:-off}
     volumes:

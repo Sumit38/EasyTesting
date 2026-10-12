@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Natural Healing</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f7d57'/%3E%3Cpath d='M9 22c0-8 5-13 14-13 0 8-5 13-13 13z' fill='%23fff'/%3E%3Cpath d='M9 23c3-5 6-8 11-10' stroke='%232f7d57' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>EasyTesting</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231d7a55'/%3E%3Cpath d='M9 16.5l4.8 4.8L23 10' fill='none' stroke='%23fff' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #f3f6f4; --panel: #ffffff; --panel-2: #f8faf9; --text: #17201b; --muted: #5d6b63; --line: #dfe6e2;
@@ -228,6 +228,9 @@
   .auth { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: grid; place-items: center; padding: 16px; overflow: auto; }
   .auth .box { width: min(420px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 26px; display: grid; gap: 12px; }
   .auth h1 { margin: 0; font-size: 24px; } .auth p { margin: 0; color: var(--muted); }
+  .authtabs { display: flex; gap: 6px; background: var(--code); border-radius: 12px; padding: 4px; }
+  .authtabs button { flex: 1; font: inherit; font-weight: 700; border: 0; background: transparent; color: var(--muted); border-radius: 9px; padding: 8px 10px; cursor: pointer; }
+  .authtabs button.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.12); }
   .chip-user { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
   .chip-user b { color: var(--text); }
   .paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; margin: 26px 0 8px; }
@@ -280,8 +283,8 @@
 <body>
 <div class="top"><div class="wrap">
   <a class="brand" href="#/">
-    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--brand)"/><path d="M9 22c0-8 5-13 14-13 0 8-5 13-13 13z" fill="#fff"/><path d="M9 23c3-5 6-8 11-10" stroke="var(--brand)" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
-    Natural Healing
+    <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="etg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--brand)"/><stop offset="1" stop-color="#0d8f8a"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#etg)"/><path d="M9 16.5l4.8 4.8L23 10" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    EasyTesting
   </a>
   <nav class="nav"><a href="#/" data-nav="home">Home</a><a href="#/usecases" data-nav="usecases">Use cases</a><a href="#/cases" data-nav="cases">Test cases</a><a href="#/code" data-nav="code">Test code</a><a href="#/runs" data-nav="runs">Runs</a><a href="#/report" data-nav="report">Report</a><a href="#/team" data-nav="team" id="nav-team" class="hidden">Team</a></nav>
   <span class="spacer"></span>
@@ -295,7 +298,7 @@
 <div id="view-new" data-view class="hidden">
   <div class="hero">
     <h1>Run your web tests. <em>We fix the locators that break.</em></h1>
-    <p>When a release renames or moves a button, your test does not have to fail with “element not found”. Natural Healing finds the same element again, carries on, and shows you exactly what it changed.</p>
+    <p>When a release renames or moves a button, your test does not have to fail with “element not found”. EasyTesting finds the same element again, carries on, and shows you exactly what it changed.</p>
     <div class="how">
       <div><b><span class="n">1</span>App link</b>Where your site lives</div>
       <div><b><span class="n">2</span>Pick a tool</b>Playwright or Selenium</div>
@@ -447,7 +450,7 @@
 
 </main>
 <div id="auth" class="auth hidden"></div>
-<footer>Natural Healing · assertions are never changed · only locators that stop matching are healed</footer>
+<footer>EasyTesting · assertions are never changed · only locators that stop matching are healed</footer>
 <div class="toast hidden" id="toast"></div>
 
 <script>
@@ -667,7 +670,7 @@ async function loadRun() {
   // verdict note
   const v = $('verdict'); v.replaceChildren();
   if (!active) {
-    if (run.status === 'passed' && !run.failures) v.append(el('div', { class: 'note good', text: 'All tests passed and no locator broke. Natural Healing has remembered these elements, so a future release that changes them can be healed.' }));
+    if (run.status === 'passed' && !run.failures) v.append(el('div', { class: 'note good', text: 'All tests passed and no locator broke. EasyTesting has remembered these elements, so a future release that changes them can be healed.' }));
     else if (run.failures && run.healed === run.failures) v.append(el('div', { class: 'note good', text: `${run.healed} broken locator${run.healed === 1 ? ' was' : 's were'} fixed during this run, so your tests kept going instead of failing. Review the fixes below, then apply them to your test files.` }));
     else if (run.status === 'failed' && !run.failures) v.append(el('div', { class: 'note', text: 'Tests failed, but not because an element went missing (or this is the first run, so nothing was known yet). Healing only handles missing locators; check the log for the real cause.' }));
     else if (run.status === 'error') v.append(el('div', { class: 'note', text: 'The run could not start. The log below says why (a bad zip, a failed install, or a missing browser are the usual causes).' }));

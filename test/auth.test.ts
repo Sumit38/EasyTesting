@@ -115,3 +115,52 @@ describe('accounts', () => {
     assert.equal(locked.status, 429);
   });
 });
+
+describe('self-service sign-up', () => {
+  const boot = async (allowSignup: boolean) => {
+    const { server } = createApp({ dataDir: mkdtempSync(join(tmpdir(), 'signup-')), accounts: true, allowSignup });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const call = async (path: string, json?: unknown) => {
+      const res = await fetch(base + path, { method: json === undefined ? 'GET' : 'POST', headers: json === undefined ? {} : { 'content-type': 'application/json' }, body: json === undefined ? undefined : JSON.stringify(json) });
+      return { status: res.status, body: (await res.json().catch(() => ({}))) as any, cookie: res.headers.get('set-cookie')?.split(';')[0] ?? '' };
+    };
+    return { server, call };
+  };
+
+  it('is off unless the server turns it on', async () => {
+    const { server, call } = await boot(false);
+    try {
+      assert.equal((await call('/api/auth/state')).body.signup, false);
+      await call('/api/auth/setup', { email: 'a@x.io', name: 'A', password: 'admin-password' });
+      const r = await call('/api/auth/register', { email: 'new@x.io', name: 'N', password: 'new-password-1' });
+      assert.equal(r.status, 403);
+    } finally { server.close(); }
+  });
+
+  it('lets a new person create a tester account and signs them in, never as an admin', async () => {
+    const { server, call } = await boot(true);
+    try {
+      assert.equal((await call('/api/auth/state')).body.signup, true);
+      assert.equal((await call('/api/auth/register', { email: 'early@x.io', name: 'E', password: 'early-password' })).status, 409, 'the first account must be the admin');
+      await call('/api/auth/setup', { email: 'a@x.io', name: 'A', password: 'admin-password' });
+      const r = await call('/api/auth/register', { email: 'new@x.io', name: 'New Person', password: 'new-password-1', role: 'admin' });
+      assert.equal(r.status, 200);
+      assert.equal(r.body.user.role, 'tester', 'asking to be an admin is ignored');
+      assert.ok(r.cookie.startsWith('nh_session='));
+      assert.equal((await call('/api/auth/register', { email: 'NEW@x.io', name: 'Dup', password: 'new-password-2' })).status, 409);
+      assert.equal((await call('/api/auth/register', { email: 'weak@x.io', name: 'W', password: 'short' })).status, 400);
+      const login = await call('/api/auth/login', { email: 'new@x.io', password: 'new-password-1' });
+      assert.equal(login.status, 200);
+    } finally { server.close(); }
+  });
+
+  it('limits how many accounts one address can create in an hour', async () => {
+    const { server, call } = await boot(true);
+    try {
+      await call('/api/auth/setup', { email: 'a@x.io', name: 'A', password: 'admin-password' });
+      for (let i = 0; i < 5; i++) assert.equal((await call('/api/auth/register', { email: `u${i}@x.io`, name: 'U', password: 'user-password-' + i })).status, 200);
+      assert.equal((await call('/api/auth/register', { email: 'u6@x.io', name: 'U', password: 'user-password-6' })).status, 429);
+    } finally { server.close(); }
+  });
+});

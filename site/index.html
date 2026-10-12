@@ -1,0 +1,889 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EasyTesting: test your website without writing code</title>
+<meta name="description" content="Describe what your app should do or upload your test cases. EasyTesting runs them in a real browser, fixes tests that break when your app changes, and tells you how much to trust the results.">
+<meta name="theme-color" content="#1f7a55">
+<meta property="og:title" content="EasyTesting: test your website without writing code">
+<meta property="og:description" content="Describe it. We test it. Broken tests fix themselves.">
+<meta property="og:type" content="website">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #fafcfb; --surface: #ffffff; --surface-2: #f3f7f5; --ink: #0e1a13; --muted: #52625a; --line: #e0e8e4;
+    --brand: #1d7a55; --brand-ink: #ffffff; --brand-2: #0d8f8a; --soft: #e7f4ed; --accent: #f0a63a;
+    --ok: #178350; --ok-soft: #e0f3e8; --warn: #9a5b00; --warn-soft: #fdf0d8; --bad: #b3261e; --bad-soft: #fde8e6; --info: #1b5fb3; --info-soft: #e3eefb;
+    --shadow: 0 1px 2px rgba(15, 40, 28, .06), 0 14px 40px rgba(15, 40, 28, .09);
+    --code-bg: #0e1a13; --code-ink: #d6efe2;
+  }
+  :root[data-theme="dark"] {
+    --bg: #09110d; --surface: #111a15; --surface-2: #16211b; --ink: #e8f1ec; --muted: #98afa3; --line: #22312a;
+    --brand: #4cc08c; --brand-ink: #07140d; --brand-2: #35c5bd; --soft: #14281f; --accent: #f2b255;
+    --ok: #5bd197; --ok-soft: #153523; --warn: #eab35c; --warn-soft: #3a2b10; --bad: #f28b82; --bad-soft: #3c1d1b; --info: #7fb2f5; --info-soft: #162a42;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 14px 40px rgba(0, 0, 0, .35);
+    --code-bg: #060c09; --code-ink: #c8e6d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #09110d; --surface: #111a15; --surface-2: #16211b; --ink: #e8f1ec; --muted: #98afa3; --line: #22312a;
+      --brand: #4cc08c; --brand-ink: #07140d; --brand-2: #35c5bd; --soft: #14281f; --accent: #f2b255;
+      --ok: #5bd197; --ok-soft: #153523; --warn: #eab35c; --warn-soft: #3a2b10; --bad: #f28b82; --bad-soft: #3c1d1b; --info: #7fb2f5; --info-soft: #162a42;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 14px 40px rgba(0, 0, 0, .35);
+      --code-bg: #060c09; --code-ink: #c8e6d6;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+  body { margin: 0; font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; }
+  img, svg { max-width: 100%; }
+  a { color: var(--brand); }
+  h1, h2, h3 { line-height: 1.12; letter-spacing: -.025em; margin: 0; }
+  p { margin: 0; }
+  .container { width: min(1140px, 100% - 40px); margin-inline: auto; }
+  .skip { position: absolute; left: -999px; top: 8px; background: var(--brand); color: var(--brand-ink); padding: 8px 14px; border-radius: 8px; z-index: 50; }
+  .skip:focus { left: 12px; }
+  :focus-visible { outline: 3px solid var(--brand-2); outline-offset: 3px; border-radius: 6px; }
+
+  /* grid children may shrink below their content, so nothing pushes the page wider than the screen */
+  .hero-grid > *, .split > *, .report > *, .twocol > *, .cols3 > *, .cols4 > *, .dm-cols > * { min-width: 0; }
+  .result-bar span { white-space: normal; }
+
+  /* nav */
+  header.nav { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(12px); border-bottom: 1px solid transparent; transition: border-color .2s, box-shadow .2s; }
+  header.nav.scrolled { border-color: var(--line); box-shadow: 0 6px 24px rgba(15, 40, 28, .06); }
+  .nav-in { display: flex; align-items: center; gap: 22px; height: 68px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 20px; letter-spacing: -.02em; color: var(--ink); text-decoration: none; }
+  .logo svg { width: 34px; height: 34px; flex: none; }
+  .links { display: flex; gap: 6px; margin-left: 14px; }
+  .links a { color: var(--muted); text-decoration: none; padding: 8px 12px; border-radius: 99px; font-size: 15px; font-weight: 600; }
+  .links a:hover { color: var(--ink); background: var(--surface-2); }
+  .grow { flex: 1; }
+  .icon-btn { width: 40px; height: 40px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer; font-size: 16px; }
+  .menu-btn { display: none; }
+
+  /* buttons */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-weight: 700; font-size: 16px; padding: 12px 22px; border-radius: 12px; text-decoration: none; cursor: pointer; transition: transform .15s, box-shadow .15s, border-color .15s; }
+  .btn:hover { transform: translateY(-2px); border-color: var(--brand); }
+  .btn.primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: var(--brand-ink); border-color: transparent; box-shadow: 0 10px 26px color-mix(in srgb, var(--brand) 35%, transparent); }
+  .btn.sm { padding: 9px 16px; font-size: 15px; border-radius: 10px; }
+  .btn.lg { padding: 15px 28px; font-size: 17px; border-radius: 14px; }
+
+  /* hero */
+  .hero { position: relative; padding: 70px 0 90px; overflow: hidden; }
+  .hero::before { content: ""; position: absolute; inset: -20% -10% auto -10%; height: 90%; z-index: -1;
+    background: radial-gradient(600px 320px at 15% 20%, color-mix(in srgb, var(--brand) 22%, transparent), transparent 70%), radial-gradient(520px 300px at 85% 10%, color-mix(in srgb, var(--brand-2) 20%, transparent), transparent 70%); }
+  .hero::after { content: ""; position: absolute; inset: 0; z-index: -1; opacity: .5; background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 46px 46px; mask-image: radial-gradient(ellipse at 50% 0%, #000 0%, transparent 70%); -webkit-mask-image: radial-gradient(ellipse at 50% 0%, #000 0%, transparent 70%); }
+  .hero-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 54px; align-items: center; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 8px; background: var(--soft); color: var(--brand); border: 1px solid color-mix(in srgb, var(--brand) 25%, transparent); font-weight: 700; font-size: 14px; padding: 6px 14px; border-radius: 99px; margin-bottom: 22px; }
+  .eyebrow i { width: 8px; height: 8px; border-radius: 99px; background: var(--brand); box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 25%, transparent); }
+  .hero h1 { font-size: clamp(38px, 5.6vw, 66px); font-weight: 850; }
+  .grad { background: linear-gradient(120deg, var(--brand), var(--brand-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero .lead { font-size: clamp(18px, 2vw, 21px); color: var(--muted); margin: 22px 0 32px; max-width: 580px; }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 14px; }
+  .proof { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 30px; color: var(--muted); font-size: 15px; font-weight: 600; }
+  .proof span::before { content: "✓"; color: var(--brand); font-weight: 800; margin-right: 8px; }
+
+  /* app mock */
+  .mock { position: relative; margin-bottom: 118px; }
+  .win { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden; }
+  .win-bar { display: flex; align-items: center; gap: 7px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+  .win-bar i { width: 11px; height: 11px; border-radius: 99px; background: var(--line); }
+  .win-bar i:nth-child(1) { background: #ec6a5e; } .win-bar i:nth-child(2) { background: #f4bf4f; } .win-bar i:nth-child(3) { background: #61c554; }
+  .win-bar b { margin-left: 10px; font-size: 13px; color: var(--muted); font-weight: 600; }
+  .win-body { padding: 18px; display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+  .win { min-width: 0; }
+  .step-label { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .step-label span { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 99px; background: var(--brand); color: var(--brand-ink); font-size: 12px; letter-spacing: 0; }
+  .note-card { background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; font-size: 14px; color: var(--muted); line-height: 1.55; }
+  .note-card b { color: var(--ink); }
+  .case { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 14px; font-weight: 600; }
+  .case .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 99px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+  .chip.ok { background: var(--ok-soft); color: var(--ok); } .chip.warn { background: var(--warn-soft); color: var(--warn); } .chip.info { background: var(--info-soft); color: var(--info); } .chip.bad { background: var(--bad-soft); color: var(--bad); }
+  .result-bar { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; background: var(--soft); border-radius: 12px; padding: 12px 14px; font-size: 14px; }
+  .result-bar b { font-size: 20px; letter-spacing: -.02em; margin-right: 4px; }
+  .float { position: absolute; right: -14px; bottom: -132px; width: min(330px, 86%); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 14px 16px; animation: bob 6s ease-in-out infinite; }
+  .float .hd { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 14px; margin-bottom: 8px; }
+  .float code, code.k { background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; font: 12.5px ui-monospace, "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
+  .float .row { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 13px; color: var(--muted); align-items: center; }
+  @keyframes bob { 50% { transform: translateY(-8px); } }
+
+
+  /* interactive demo */
+  .dm { max-width: 980px; margin: 0 auto; }
+  .dm-tabs { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 22px; }
+  .dm-tab { display: inline-flex; align-items: center; gap: 10px; font: inherit; font-weight: 700; font-size: 15px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 99px; padding: 9px 18px 9px 10px; cursor: pointer; transition: .15s; }
+  .dm-tab span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 99px; background: var(--surface-2); color: var(--muted); font-size: 13px; }
+  .dm-tab[aria-selected="true"] { color: var(--ink); border-color: var(--brand); box-shadow: 0 6px 18px color-mix(in srgb, var(--brand) 18%, transparent); }
+  .dm-tab[aria-selected="true"] span { background: var(--brand); color: var(--brand-ink); }
+  .dm-tab.done span { background: var(--ok-soft); color: var(--ok); }
+  .dm-panel { padding: 22px; min-height: 380px; }
+  .dm-panel[hidden] { display: none; }
+  .dm-cols { display: grid; grid-template-columns: 1.25fr 1fr; gap: 26px; align-items: start; }
+  .dm-h { font-size: 22px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 8px; }
+  .dm-p { color: var(--muted); font-size: 16px; margin-bottom: 16px; }
+  .dm-text { background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; font: 14px/1.7 ui-monospace, "Cascadia Code", Consolas, monospace; white-space: pre-wrap; max-height: 340px; overflow: auto; }
+  .dm-foot { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 18px; }
+  .dm-cases { display: grid; gap: 8px; max-height: 360px; overflow: auto; padding-right: 4px; }
+  .dm-case { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  details.dm-case { padding: 0; border-radius: 12px; }
+  details.dm-case[open] { box-shadow: none; }
+  .dm-case > summary::after { content: none; }
+  .dm-case > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 15px; font-weight: 650; }
+  .dm-case > summary::-webkit-details-marker { display: none; }
+  .dm-case > summary::before { content: "▸"; color: var(--muted); }
+  .dm-case[open] > summary::before { content: "▾"; }
+  .dm-case .t { flex: 1; min-width: 0; }
+  .dm-case .id { color: var(--muted); font-weight: 700; font-size: 13px; }
+  .dm-steps { padding: 2px 14px 12px 34px; display: grid; gap: 6px; }
+  .dm-step { display: flex; gap: 10px; align-items: baseline; font-size: 14px; color: var(--muted); }
+  .dm-step b { color: var(--ink); font-weight: 650; }
+  .dm-step .tag { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; background: var(--surface-2); border-radius: 6px; padding: 1px 7px; color: var(--ink); }
+  .dm-run { display: grid; gap: 8px; max-height: 330px; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
+  .dm-rc { min-width: 0; }
+  .dm-rl div { flex-wrap: wrap; }
+  .dm-rc { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; background: var(--surface); }
+  .dm-rc .hd { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; }
+  .dm-rc .hd .t { flex: 1; }
+  .dm-rc .st { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 99px; font-size: 13px; font-weight: 800; background: var(--surface-2); color: var(--muted); }
+  .dm-rc.running .st { background: var(--info-soft); color: var(--info); animation: spin 1s linear infinite; }
+  .dm-rc.passed .st { background: var(--ok-soft); color: var(--ok); }
+  .dm-rl { display: grid; gap: 3px; margin-top: 8px; padding-left: 32px; font-size: 13.5px; color: var(--muted); }
+  .dm-rl div { display: flex; gap: 8px; align-items: baseline; }
+  .dm-rl i { font-style: normal; color: var(--ok); font-weight: 800; }
+  .dm-bar { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; margin-bottom: 14px; }
+  .dm-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--brand), var(--brand-2)); transition: width .25s; }
+  .dm-done { margin-top: 14px; }
+  .dm-change { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; margin-bottom: 16px; }
+  .dm-change .site { background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+  .dm-change .site small { display: block; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .dm-change .go { color: var(--brand); font-weight: 800; font-size: 22px; }
+  .dm-heal { background: var(--warn-soft); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); border-radius: 14px; padding: 14px 16px; margin-top: 14px; display: grid; gap: 6px; font-size: 14.5px; }
+  .dm-caption { text-align: center; color: var(--muted); font-size: 14px; margin-top: 16px; }
+  @keyframes spin { 50% { transform: scale(1.18); } }
+  @media (prefers-reduced-motion: reduce) { .dm-rc.running .st { animation: none; } .dm-bar i { transition: none; } }
+  @media (max-width: 760px) { .dm-cols { grid-template-columns: 1fr; } .dm-change { grid-template-columns: 1fr; } .dm-change .go { transform: rotate(90deg); justify-self: center; } .dm-tab { padding-right: 12px; font-size: 14px; } }
+
+
+  /* hero video, plain-language sections */
+  .hero-grid { grid-template-columns: .9fr 1.1fr; }
+  .cta-note { color: var(--muted); font-size: 14.5px; margin-top: 14px; }
+  .cta-note b { color: var(--ink); }
+  .signin-link { background: transparent; }
+  .vid .win { box-shadow: var(--shadow), 0 30px 70px rgba(15, 40, 28, .16); }
+  .vid-wrap { position: relative; aspect-ratio: 16 / 9; background: #0b1410; }
+  .vid-wrap video { display: block; width: 100%; height: 100%; object-fit: contain; background: #0b1410; }
+  .vid-play { position: absolute; inset: 0; margin: auto; width: 88px; height: 88px; border-radius: 99px; border: 0; cursor: pointer; color: var(--brand-ink); background: linear-gradient(135deg, var(--brand), var(--brand-2)); box-shadow: 0 14px 40px rgba(0, 0, 0, .4), 0 0 0 10px rgba(255, 255, 255, .22); display: grid; place-items: center; transition: transform .2s; }
+  .vid-play:hover { transform: scale(1.07); }
+  .vid-play svg { width: 40px; height: 40px; margin-left: 5px; }
+  .vid-wrap.playing .vid-play { display: none; }
+  .vid-note { text-align: center; color: var(--muted); font-size: 14px; margin-top: 14px; }
+  .ba { display: grid; align-content: start; gap: 18px; }
+  .ba .chip { justify-self: start; font-size: 13px; padding: 4px 14px; }
+  .ba.good { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); background: linear-gradient(180deg, var(--soft), var(--surface) 60%); }
+  .ticks.bad li::before { content: "✕"; background: var(--bad-soft); color: var(--bad); }
+  .gloss { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 0; }
+  .gloss > div { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; }
+  .gloss dt { font-weight: 800; font-size: 18px; letter-spacing: -.01em; color: var(--brand); margin-bottom: 6px; }
+  .gloss dd { margin: 0; color: var(--muted); font-size: 16px; }
+  @media (max-width: 960px) { .hero-grid { grid-template-columns: 1fr; } .gloss { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 620px) { .gloss { grid-template-columns: 1fr; } .signin-link { display: none; } .vid-play { width: 68px; height: 68px; } .vid-play svg { width: 30px; height: 30px; } }
+
+  /* sections */
+  section { padding: 92px 0; }
+  .tint { background: var(--surface-2); border-block: 1px solid var(--line); }
+  .head { max-width: 720px; margin: 0 auto 54px; text-align: center; }
+  .head .eyebrow { margin-bottom: 16px; }
+  .head h2 { font-size: clamp(30px, 4vw, 46px); font-weight: 820; }
+  .head p { color: var(--muted); font-size: 19px; margin-top: 16px; }
+  .cols3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .cols4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 26px; box-shadow: 0 1px 2px rgba(15, 40, 28, .04); transition: transform .2s, box-shadow .2s, border-color .2s; }
+  .card:hover { transform: translateY(-4px); box-shadow: var(--shadow); border-color: color-mix(in srgb, var(--brand) 40%, var(--line)); }
+  .ico { width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; background: var(--soft); color: var(--brand); margin-bottom: 18px; }
+  .ico svg { width: 26px; height: 26px; }
+  .card h3 { font-size: 21px; font-weight: 780; margin-bottom: 8px; }
+  .card p { color: var(--muted); font-size: 16px; }
+  .num { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 99px; background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: var(--brand-ink); font-weight: 800; margin-bottom: 16px; }
+
+  /* three ways in */
+  .path .tagline { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); font-size: 14px; font-weight: 700; color: var(--brand); }
+
+  /* healing */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  .split h2 { font-size: clamp(30px, 4vw, 44px); font-weight: 820; margin-bottom: 18px; }
+  .split p.big { color: var(--muted); font-size: 19px; margin-bottom: 22px; }
+  .ticks { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+  .ticks li { display: flex; gap: 12px; align-items: flex-start; }
+  .ticks li::before { content: "✓"; flex: none; display: grid; place-items: center; width: 24px; height: 24px; margin-top: 2px; border-radius: 99px; background: var(--ok-soft); color: var(--ok); font-weight: 800; font-size: 14px; }
+  .heal-demo { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .site-before, .site-after { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; box-shadow: 0 1px 2px rgba(15, 40, 28, .05); }
+  .site-before .tag, .site-after .tag { font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 10px; }
+  .fakebtn { display: inline-block; background: var(--brand); color: var(--brand-ink); font-weight: 700; padding: 9px 20px; border-radius: 9px; font-size: 15px; }
+  .arrow { text-align: center; color: var(--muted); font-weight: 700; font-size: 14px; }
+  .arrow svg { width: 22px; height: 22px; display: block; margin: 0 auto 4px; color: var(--brand); }
+  .diff { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .diff > div { border-radius: 12px; padding: 12px; font-size: 13px; }
+  .diff .was { background: var(--bad-soft); } .diff .now { background: var(--ok-soft); }
+  .diff small { display: block; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+
+  /* report */
+  .report { display: grid; grid-template-columns: 1fr 1.3fr; gap: 20px; }
+  .gauge-card { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 6px; }
+  .ring { position: relative; width: 150px; height: 150px; }
+  .ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring .trk { stroke: var(--surface-2); } .ring .val { stroke: var(--ok); }
+  .ring b { position: absolute; inset: 0; display: grid; place-items: center; font-size: 42px; letter-spacing: -.03em; }
+  .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+  .tile b { display: block; font-size: 28px; letter-spacing: -.02em; line-height: 1.1; }
+  .tile span { color: var(--muted); font-size: 14px; }
+  .tile.good b { color: var(--ok); }
+  .report-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 24px; margin-top: 30px; }
+  .report-list div { display: flex; gap: 10px; align-items: flex-start; font-size: 16px; font-weight: 600; }
+  .report-list div::before { content: ""; flex: none; width: 10px; height: 10px; border-radius: 3px; margin-top: 8px; background: linear-gradient(135deg, var(--brand), var(--brand-2)); }
+
+  /* honesty */
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .now-list, .soon-list { list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 10px; }
+  .now-list li::before { content: "✓ "; color: var(--ok); font-weight: 800; }
+  .soon-list li::before { content: "◔ "; color: var(--warn); font-weight: 800; }
+
+  /* faq */
+  .faq { max-width: 820px; margin: 0 auto; display: grid; gap: 12px; }
+  details { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 4px 22px; }
+  details[open] { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); box-shadow: var(--shadow); }
+  summary { cursor: pointer; list-style: none; font-weight: 750; font-size: 18px; padding: 18px 0; display: flex; justify-content: space-between; gap: 16px; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; color: var(--brand); font-size: 26px; line-height: 1; font-weight: 500; }
+  details[open] summary::after { content: "–"; }
+  details p { color: var(--muted); padding-bottom: 20px; }
+
+  /* final cta */
+  .final { position: relative; border-radius: 28px; padding: 64px 40px; text-align: center; color: var(--brand-ink); overflow: hidden; background: linear-gradient(135deg, var(--brand), var(--brand-2)); box-shadow: var(--shadow); }
+  .final::before { content: ""; position: absolute; inset: 0; background: radial-gradient(500px 240px at 80% 0%, rgba(255, 255, 255, .22), transparent 70%); }
+  .final > * { position: relative; }
+  .final h2 { font-size: clamp(30px, 4.4vw, 48px); font-weight: 830; }
+  .final p { font-size: 19px; opacity: .92; margin: 14px auto 26px; max-width: 620px; }
+  .code { text-align: left; margin: 0 auto 28px; max-width: 640px; background: var(--code-bg); color: var(--code-ink); border-radius: 16px; padding: 18px 20px; font: 14.5px/1.7 ui-monospace, "Cascadia Code", Consolas, monospace; position: relative; box-shadow: 0 14px 36px rgba(0, 0, 0, .35); overflow-x: auto; }
+  .code .c { color: #7fa492; }
+  .copy { position: absolute; top: 10px; right: 10px; background: rgba(255, 255, 255, .12); color: #fff; border: 0; border-radius: 8px; padding: 6px 12px; font: 600 13px system-ui, sans-serif; cursor: pointer; }
+  .final .btn { background: #fff; color: #0e1a13; border-color: transparent; }
+  .final .btn.ghost { background: rgba(255, 255, 255, .14); color: #fff; border: 1px solid rgba(255, 255, 255, .4); }
+
+  footer { padding: 52px 0 40px; }
+  .foot { display: flex; flex-wrap: wrap; gap: 24px 48px; justify-content: space-between; align-items: flex-start; }
+  .foot ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .foot a { color: var(--muted); text-decoration: none; font-size: 15px; font-weight: 600; } .foot a:hover { color: var(--brand); }
+  .foot h4 { margin: 0 0 12px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
+  .fine { margin-top: 34px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+
+  /* reveal on scroll */
+  .reveal { opacity: 0; transform: translateY(22px); transition: opacity .6s ease, transform .6s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; transition: none; } .float { animation: none; } html { scroll-behavior: auto; } .btn, .card { transition: none; } }
+  .no-js .reveal { opacity: 1; transform: none; }
+
+  @media (max-width: 960px) {
+    .hero-grid, .split, .report, .twocol { grid-template-columns: 1fr; }
+    .hero { padding-top: 40px; }
+    .mock { margin-bottom: 40px; }
+    .cols3, .cols4 { grid-template-columns: 1fr 1fr; }
+    .report-list { grid-template-columns: 1fr 1fr; }
+    .links { display: none; position: absolute; top: 68px; left: 0; right: 0; flex-direction: column; background: var(--bg); padding: 12px 20px 20px; border-bottom: 1px solid var(--line); margin: 0; }
+    .links.open { display: flex; } .links a { padding: 12px; }
+    .menu-btn { display: inline-block; }
+  }
+  @media (max-width: 620px) {
+    section { padding: 64px 0; }
+    .cols3, .cols4, .tiles, .report-list, .diff { grid-template-columns: 1fr; }
+    .float { position: static; width: 100%; margin-top: 14px; animation: none; }
+    .final { padding: 44px 22px; }
+    .nav-in .btn.sm:not(.primary) { display: none; }
+    #theme { display: none; }
+    .nav-in { gap: 12px; }
+  }
+</style>
+</head>
+<body class="no-js">
+<script>document.body.classList.remove('no-js'); try { var t = localStorage.getItem('et-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<a class="skip" href="#main">Skip to the content</a>
+
+<header class="nav" id="top">
+  <div class="container nav-in">
+    <a class="logo" href="#top" aria-label="EasyTesting home">
+      <svg viewBox="0 0 40 40" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--brand)"/><stop offset="1" stop-color="var(--brand-2)"/></linearGradient></defs><rect width="40" height="40" rx="11" fill="url(#lg)"/><path d="M11 21.5l6 6 12-14" fill="none" stroke="#fff" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      EasyTesting
+    </a>
+    <nav class="links" id="links" aria-label="Main">
+      <a href="#what">What it is</a>
+      <a href="#demo">Demo</a>
+      <a href="#how">How it works</a>
+      <a href="#healing">Self-healing</a>
+      <a href="#report">Reports</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <span class="grow"></span>
+    <button class="icon-btn" id="theme" title="Switch light or dark" aria-label="Switch light or dark theme">◐</button>
+    <a class="btn sm signin-link js-signin" href="http://127.0.0.1:4173/#/signin">Sign in</a>
+    <a class="btn primary sm js-start" href="#get">Get started</a>
+    <button class="icon-btn menu-btn" id="menu" aria-label="Open the menu" aria-expanded="false" aria-controls="links">☰</button>
+  </div>
+</header>
+
+<main id="main">
+  <!-- HERO -->
+  <div class="hero">
+    <div class="container hero-grid">
+      <div>
+        <span class="eyebrow"><i></i> Testing for people who don't write code</span>
+        <h1>Describe it. <span class="grad">We test it.</span> Broken tests fix themselves.</h1>
+        <p class="lead">EasyTesting checks that your website works, the way a person would. Paste a use case or upload your test cases, and it writes, runs and reports the tests for you.</p>
+        <div class="cta-row">
+          <a class="btn primary lg js-start" href="#get">Get started</a>
+          <a class="btn lg js-signin" href="http://127.0.0.1:4173/#/signin">Sign in</a>
+        </div>
+        <p class="cta-note"><b>New here?</b> Choose Get started. <b>Already have an account?</b> Choose Sign in.</p>
+        <div class="proof">
+          <span>No coding needed</span>
+          <span>Excel and CSV in and out</span>
+          <span>Real Chrome or Edge</span>
+        </div>
+      </div>
+
+      <div class="vid" aria-label="Demo video">
+        <div class="win">
+          <div class="win-bar"><i></i><i></i><i></i><b>Watch: from a use case to a report in about a minute</b></div>
+          <div class="vid-wrap">
+            <video id="demoVideo" controls preload="metadata" playsinline poster="demo-poster.jpg">
+              <source src="demo.webm" type="video/webm">
+              Your browser cannot play this video. <a href="demo.webm">Download it</a>, or try the interactive demo below.
+            </video>
+            <button class="vid-play" id="vidPlay" type="button" aria-label="Play the demo video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg></button>
+          </div>
+        </div>
+        <p class="vid-note">A real recording of the app. No sound needed: the captions explain each step.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- WHAT -->
+  <section id="what">
+    <div class="container">
+      <div class="head reveal">
+        <span class="eyebrow">What is EasyTesting?</span>
+        <h2>A simple way to check your website works</h2>
+        <p>Every website changes all the time, and every change can break something. <b>Testing</b> is how you find out before your users do. EasyTesting does the slow parts of testing for you: it writes the checks, runs them in a real browser, and tells you in plain language what passed, what failed, and how much to trust the answer.</p>
+      </div>
+      <div class="twocol reveal">
+        <div class="card ba">
+          <span class="chip bad">Testing without it</span>
+          <ul class="ticks bad">
+            <li><span><b>Writing test cases takes days.</b> Someone has to think of every case and type out every step by hand.</span></li>
+            <li><span><b>Tests break when the page changes.</b> Rename a button and every test that clicks it fails, even though nothing is wrong.</span></li>
+            <li><span><b>Results are hard to trust.</b> A green tick doesn't say what was never tested, or whether a failure is a real bug.</span></li>
+            <li><span><b>You need to know how to code</b> to automate anything.</span></li>
+          </ul>
+        </div>
+        <div class="card ba good">
+          <span class="chip ok">With EasyTesting</span>
+          <ul class="ticks">
+            <li><span><b>Describe it, get the cases.</b> Paste a use case in plain words and download ready-to-use test cases as Excel.</span></li>
+            <li><span><b>Tests find their way again.</b> A renamed or moved button is found again, and you see exactly what changed.</span></li>
+            <li><span><b>Every result says how sure it is.</b> Plus what was covered, what wasn't, and a clear risk score.</span></li>
+            <li><span><b>No code.</b> Everything is plain English in your browser. Existing Playwright and Selenium tests work too.</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHO -->
+  <section class="tint">
+    <div class="container">
+      <div class="head reveal">
+        <span class="eyebrow">Who it's for</span>
+        <h2>Made for the people who have to be sure</h2>
+      </div>
+      <div class="cols3">
+        <div class="card reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2h9"/></svg></div>
+          <h3>Testers and QA</h3>
+          <p>You know how the app should behave but don't want to write scripts. Describe it, review the cases, run them, and read a report you can share.</p>
+        </div>
+        <div class="card reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg></div>
+          <h3>Developers</h3>
+          <p>Tired of fixing tests after every UI change? Keep your Playwright or Selenium tests as they are, and let broken locators heal while they run.</p>
+        </div>
+        <div class="card reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0112 0M17 11a3 3 0 100-6M21 20a5 5 0 00-4-4.9"/></svg></div>
+          <h3>Small teams and owners</h3>
+          <p>No dedicated QA team? Get a plain answer to "is it safe to release?", with what was tested, what broke and what is still open.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- GLOSSARY -->
+  <section>
+    <div class="container">
+      <div class="head reveal">
+        <span class="eyebrow">In plain words</span>
+        <h2>The few terms you'll see</h2>
+        <p>Testing has a lot of jargon. Here is all you need, in everyday language.</p>
+      </div>
+      <dl class="gloss reveal">
+        <div><dt>Use case</dt><dd>A short description of something a person does with your app, such as “signing in”.</dd></div>
+        <div><dt>Test case</dt><dd>A checklist for one situation: the steps to follow and what should happen at the end.</dd></div>
+        <div><dt>Locator</dt><dd>How a test points at a button or field on the page. When the page changes, old locators stop working.</dd></div>
+        <div><dt>Self-healing</dt><dd>The test notices the change and finds the button or field again, instead of failing.</dd></div>
+        <div><dt>Confidence score</dt><dd>How sure EasyTesting is that it understood a step and ran it right. Higher is better.</dd></div>
+        <div><dt>Residual risk</dt><dd>A 0 to 100 score for how risky a release still is after testing. Lower is better.</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <!-- INTERACTIVE DEMO -->
+  <section id="demo" class="tint" style="padding-top:80px">
+    <div class="container">
+      <div class="head reveal">
+        <span class="eyebrow">Interactive walkthrough</span>
+        <h2>Prefer to click through it yourself?</h2>
+        <p>The same example as the video, at your own pace: a use case becomes test cases, the test cases run, then the page changes and the tests keep going.</p>
+      </div>
+      <div class="dm reveal" id="dm" hidden-until-ready>
+        <div class="dm-tabs" role="tablist" aria-label="Demo steps">
+          <button class="dm-tab" role="tab" id="dmt0" aria-controls="dmp0" aria-selected="true" type="button"><span>1</span>Describe</button>
+          <button class="dm-tab" role="tab" id="dmt1" aria-controls="dmp1" aria-selected="false" type="button"><span>2</span>Review</button>
+          <button class="dm-tab" role="tab" id="dmt2" aria-controls="dmp2" aria-selected="false" type="button"><span>3</span>Run</button>
+          <button class="dm-tab" role="tab" id="dmt3" aria-controls="dmp3" aria-selected="false" type="button"><span>4</span>After a release</button>
+        </div>
+        <div class="win">
+          <div class="win-bar"><i></i><i></i><i></i><b id="dmtitle">EasyTesting</b></div>
+          <div class="dm-panel" id="dmp0" role="tabpanel" aria-labelledby="dmt0"></div>
+          <div class="dm-panel" id="dmp1" role="tabpanel" aria-labelledby="dmt1" hidden></div>
+          <div class="dm-panel" id="dmp2" role="tabpanel" aria-labelledby="dmt2" hidden></div>
+          <div class="dm-panel" id="dmp3" role="tabpanel" aria-labelledby="dmt3" hidden></div>
+        </div>
+        <p class="dm-caption">This is a replay of a real run on our own sample sign-in page, not a live app. The real thing runs on your machine or server.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW -->
+  <section id="how">
+    <div class="container">
+      <div class="head reveal">
+        <span class="eyebrow">How it works</span>
+        <h2>From idea to answer in four steps</h2>
+        <p>No scripts, no setup of test tools, nothing to install on your app.</p>
+      </div>
+      <div class="cols4">
+        <div class="card reveal"><span class="num">1</span><h3>Bring what you have</h3><p>A use case, an Excel sheet of test cases, or an existing test project. Start wherever you are.</p></div>
+        <div class="card reveal"><span class="num">2</span><h3>Check how we read it</h3><p>See every step with what we understood and how sure we are. Fix anything unclear. We never guess what you meant.</p></div>
+        <div class="card reveal"><span class="num">3</span><h3>Run it for real</h3><p>Paste your app link. The cases run in a real browser, step by step, with a screenshot when something fails.</p></div>
+        <div class="card reveal"><span class="num">4</span><h3>Read the report</h3><p>Coverage, bugs, what wasn't tested, and one score for how risky the release is, with the working shown.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WAYS TO START -->
+  <section id="start" class="tint">
+    <div class="container">
+      <div class="head reveal">
+        <span class="eyebrow">Three ways to start</span>
+        <h2>Whatever you have, you can begin</h2>
+      </div>
+      <div class="cols3">
+        <div class="card path reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></div>
+          <h3>I have a use case</h3>
+          <p>Paste or upload it. We write positive, negative, boundary and alternate-flow cases, marked as <b>stated</b> or <b>assumed</b> so you know which expectations came from you. Optional AI writes broader cases.</p>
+          <div class="tagline">Output: Excel or CSV to review and download</div>
+        </div>
+        <div class="card path reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg></div>
+          <h3>I have test cases</h3>
+          <p>Upload your Excel or CSV with any column names. Match the columns, confirm how each step was read, then run. Steps in one cell or one per row both work.</p>
+          <div class="tagline">Output: results with a confidence score</div>
+        </div>
+        <div class="card path reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg></div>
+          <h3>I have test code</h3>
+          <p>Upload your Playwright or Selenium project as a zip. Nothing in your tests changes, and locators that break get healed while the tests run.</p>
+          <div class="tagline">Output: fixes you can accept and download</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HEALING -->
+  <section id="healing">
+    <div class="container split">
+      <div class="reveal">
+        <span class="eyebrow">Self-healing</span>
+        <h2>The page changed. The test didn't fail.</h2>
+        <p class="big">A developer renames a button, wraps it in a new box, or changes its id. Normally every test that touches it stops with “element not found”. EasyTesting remembers what the element looked like and finds it again.</p>
+        <ul class="ticks">
+          <li><span><b>Shows you what changed.</b> The old locator beside the new one, with how sure it is.</span></li>
+          <li><span><b>Refuses to guess.</b> If a button is renamed beyond recognition, it stops and lists what's on the page instead of clicking the wrong thing.</span></li>
+          <li><span><b>You decide what's saved.</b> Nothing is written into your tests until you press Apply.</span></li>
+        </ul>
+      </div>
+      <div class="heal-demo reveal" aria-label="Example of a healed locator">
+        <div class="site-before"><span class="tag">Last week's page</span><span class="fakebtn">Save</span> &nbsp; <code class="k">#saveBtn</code></div>
+        <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M5 13l7 7 7-7"/></svg>A new release ships</div>
+        <div class="site-after"><span class="tag">This week's page</span><span class="fakebtn">Save changes</span> &nbsp; <code class="k">#btn-save-9f2</code></div>
+        <div class="diff">
+          <div class="was"><small>Was</small><code class="k">#saveBtn</code></div>
+          <div class="now"><small>Found it again</small><code class="k">button “Save changes”</code></div>
+        </div>
+        <div class="case"><span class="t">Test continues and passes</span><span class="chip warn">Review suggested</span><span class="chip ok">73% sure</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- REPORT -->
+  <section id="report" class="tint">
+    <div class="container">
+      <div class="head reveal">
+        <span class="eyebrow">Reports</span>
+        <h2>One page that answers “is it safe to release?”</h2>
+        <p>Not just pass or fail. See what was covered, what wasn't, what broke, and what is still open, in plain language.</p>
+      </div>
+      <div class="report reveal">
+        <div class="card gauge-card">
+          <div class="ring"><svg viewBox="0 0 120 120"><circle class="trk" cx="60" cy="60" r="50" fill="none" stroke-width="12"/><circle class="val" cx="60" cy="60" r="50" fill="none" stroke-width="12" stroke-linecap="round" stroke-dasharray="314" stroke-dashoffset="242"/></svg><b>23</b></div>
+          <h3>Residual risk</h3>
+          <span class="chip ok">Low</span>
+          <p style="font-size:14px">Out of 100. Lower is better. Example report.</p>
+        </div>
+        <div class="card">
+          <div class="tiles">
+            <div class="tile good"><b>100%</b><span>Pass rate on stated cases</span></div>
+            <div class="tile"><b>50%</b><span>Pages covered</span></div>
+            <div class="tile"><b>0</b><span>Open bugs</span></div>
+            <div class="tile"><b>91%</b><span>Confidence in the results</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="report-list reveal">
+        <div>Test coverage: pages and controls used</div>
+        <div>Uncovered areas you haven't tested</div>
+        <div>Scenarios planned but never attended</div>
+        <div>Bugs with severity and status</div>
+        <div>Automatic re-test of fixed bugs</div>
+        <div>Defect density and residual risk</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section>
+    <div class="container">
+      <div class="head reveal">
+        <span class="eyebrow">Built for real teams</span>
+        <h2>Everything a tester needs, nothing they don't</h2>
+      </div>
+      <div class="cols3">
+        <div class="card reveal"><h3>Honest about guesses</h3><p>When your use case doesn't say what should happen, the case is marked <b>assumed</b>. If it fails, you get a question to answer, not a fake bug.</p></div>
+        <div class="card reveal"><h3>Edit with confidence</h3><p>Change any step in plain English and see instantly how it will be read. Steps under 60% need your rewrite before they run.</p></div>
+        <div class="card reveal"><h3>A bug tracker that re-tests</h3><p>Failed cases become bugs. Run again after the fix and passing bugs are marked verified. Failing ones reopen.</p></div>
+        <div class="card reveal"><h3>Teams and privacy</h3><p>Sign in with your own account. Testers see their own work; admins manage the team. It runs on your machine or your server.</p></div>
+        <div class="card reveal"><h3>Optional AI, never required</h3><p>The standard generator works offline. Turn on AI for broader cases. If it ever fails, the standard method takes over and tells you why.</p></div>
+        <div class="card reveal"><h3>Download everything</h3><p>Test cases as Excel or CSV, bug lists as CSV, reports to print or save as PDF. Your work is never locked in.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HONEST -->
+  <section class="tint">
+    <div class="container">
+      <div class="head reveal">
+        <span class="eyebrow">Straight talk</span>
+        <h2>What it does today, and what's next</h2>
+        <p>We'd rather you know the limits now than find them later.</p>
+      </div>
+      <div class="twocol reveal">
+        <div class="card">
+          <h3>Works today</h3>
+          <ul class="now-list">
+            <li>Websites, tested in Chrome or Edge</li>
+            <li>Use cases, Excel and CSV test cases</li>
+            <li>Playwright and Selenium test code (JavaScript and TypeScript)</li>
+            <li>Healing, reports, bugs and re-tests</li>
+            <li>Sign-in accounts for a team</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Coming next</h3>
+          <ul class="soon-list">
+            <li>Android and iOS apps (APK testing)</li>
+            <li>Selenium test code in Python and Java</li>
+            <li>Word and PDF use cases (paste the text for now)</li>
+            <li>Content inside iframes</li>
+            <li>Scheduled runs and build-pipeline hooks</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section id="faq">
+    <div class="container">
+      <div class="head reveal">
+        <span class="eyebrow">Questions</span>
+        <h2>Frequently asked</h2>
+      </div>
+      <div class="faq reveal">
+        <details><summary>Do I need to know how to code?</summary><p>No. Use cases and test cases are plain English, and you work in the browser. If you already have Playwright or Selenium code, it works too, without any changes.</p></details>
+        <details><summary>Do I need a real app to start?</summary><p>No, not to write test cases. Generating, reviewing and downloading cases needs only the text. You need the app's link only when you press Run.</p></details>
+        <details><summary>What does the confidence score mean?</summary><p>It shows how sure we are that a result is right. It drops when a step was only partly understood or an element was matched by guesswork. A separate release score is 100 minus the residual risk.</p></details>
+        <details><summary>Will it change my tests?</summary><p>Only if you press Apply on a fix you've reviewed. Assertions, the checks that decide pass or fail, are never touched.</p></details>
+        <details><summary>Is my data sent anywhere?</summary><p>EasyTesting runs on your own machine or server. Nothing leaves it unless you turn on the optional AI helper, which sends the use case text to Anthropic to write the cases.</p></details>
+        <details><summary>What do I need to run it?</summary><p>A computer or server with Node.js 22.13 or newer, and Google Chrome or Microsoft Edge for the tests. There is also a ready-made Docker setup for hosting it for a team. Your testers only need a web browser.</p></details>
+        <details><summary>How do I get an account?</summary><p>If your team already runs EasyTesting, choose Sign in. If it is new for you, choose Get started: the first person creates the admin account and can add everyone else, and a team can also switch on self-service sign-up so people create their own.</p></details>
+        <details><summary>Can my team use it?</summary><p>Yes. Run it on a shared server with the included Docker setup. Each person signs in with their own account and sees only their own work.</p></details>
+        <details><summary>Which browsers and apps does it test?</summary><p>Websites, in Chrome or Edge. Mobile apps are planned but not available yet.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- GET -->
+  <section id="get" style="padding-top:20px">
+    <div class="container">
+      <div class="final reveal">
+        <h2>Ready to try it?</h2>
+        <p>New here, get EasyTesting running in about two minutes. Already set up, sign in. You'll need Node.js 22.13 or newer, and Chrome or Edge.</p>
+        <div class="code" id="cmds">
+          <button class="copy" id="copy" type="button">Copy</button>
+<span class="c"># get the code</span>
+git clone https://github.com/Sumit38/EasyTesting.git easytesting
+cd easytesting
+<span class="c"># install and start</span>
+npm install
+npm run serve
+<span class="c"># then open http://127.0.0.1:4173</span></div>
+        <div class="cta-row" style="justify-content:center">
+          <a class="btn lg js-signin" href="http://127.0.0.1:4173/#/signin">Sign in</a>
+          <a class="btn lg" href="https://github.com/Sumit38/EasyTesting">View on GitHub</a>
+          <a class="btn ghost lg" href="https://github.com/Sumit38/EasyTesting/blob/main/DEPLOY.md">Host it for your team</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="container">
+    <div class="foot">
+      <div>
+        <a class="logo" href="#top"><svg viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="11" fill="url(#lg)"/><path d="M11 21.5l6 6 12-14" fill="none" stroke="#fff" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/></svg>EasyTesting</a>
+        <p style="color:var(--muted);margin-top:10px;max-width:320px;font-size:15px">Describe it. We test it. Broken tests fix themselves.</p>
+      </div>
+      <div><h4>Product</h4><ul><li><a class="js-start" href="#get">Get started</a></li><li><a class="js-signin" href="http://127.0.0.1:4173/#/signin">Sign in</a></li><li><a href="#how">How it works</a></li><li><a href="#healing">Self-healing</a></li><li><a href="#report">Reports</a></li><li><a href="#faq">FAQ</a></li></ul></div>
+      <div><h4>Project</h4><ul><li><a href="https://github.com/Sumit38/EasyTesting">GitHub</a></li><li><a href="https://github.com/Sumit38/EasyTesting/blob/main/README.md">Documentation</a></li><li><a href="https://github.com/Sumit38/EasyTesting/blob/main/DEPLOY.md">Hosting guide</a></li></ul></div>
+    </div>
+    <div class="fine"><span>© 2026 EasyTesting</span><span>Example numbers on this page come from a sample sign-in page, not a customer.</span></div>
+  </div>
+</footer>
+
+<script src="config.js"></script>
+<script src="demo-data.js"></script>
+<script>
+
+(function () {
+  var D = window.EASY_DEMO;
+  var box = document.getElementById('dm');
+  if (!D) { box.closest('section').style.display = 'none'; return; }
+  box.removeAttribute('hidden-until-ready');
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var tabs = [0, 1, 2, 3].map(function (i) { return document.getElementById('dmt' + i); });
+  var panels = [0, 1, 2, 3].map(function (i) { return document.getElementById('dmp' + i); });
+  var title = document.getElementById('dmtitle');
+  var timers = [];
+  var played = {};
+  var current = 0;
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function pill(conf, label) { var c = conf >= 85 ? 'ok' : conf >= 60 ? 'warn' : 'bad'; return el('span', 'chip ' + c, (label ? label + ' ' : '') + conf + '%'); }
+  function mean(a) { return a.length ? Math.round(a.reduce(function (x, y) { return x + y; }, 0) / a.length) : 0; }
+  function btn(label, cls, fn) { var b = el('button', 'btn ' + (cls || ''), label); b.type = 'button'; b.addEventListener('click', fn); return b; }
+  function later(fn, ms) { if (reduce) { fn(); return; } timers.push(setTimeout(fn, ms)); }
+  function stop() { timers.forEach(clearTimeout); timers = []; }
+
+  function show(i) {
+    stop();
+    current = i;
+    tabs.forEach(function (t, n) { t.setAttribute('aria-selected', n === i ? 'true' : 'false'); t.classList.toggle('done', n < i); });
+    panels.forEach(function (p, n) { p.hidden = n !== i; });
+    title.textContent = ['EasyTesting · Use cases', 'EasyTesting · Test cases', 'EasyTesting · Running', 'EasyTesting · After a release'][i];
+    if (i === 2 && !played.run1) { played.run1 = true; play(panels[2].querySelector('.dm-run'), D.run1, panels[2].querySelector('.dm-bar i'), panels[2].querySelector('.dm-done'), 1); }
+    if (i === 3 && !played.run2) { played.run2 = true; play(panels[3].querySelector('.dm-run'), D.run2, panels[3].querySelector('.dm-bar i'), panels[3].querySelector('.dm-done'), 2); }
+  }
+  tabs.forEach(function (t, i) { t.addEventListener('click', function () { show(i); }); });
+
+  // 1. Describe
+  (function () {
+    var p = panels[0];
+    var left = el('div'); left.append(el('div', 'dm-h', 'Write what the app should do'), el('p', 'dm-p', 'Plain words are fine. Headings like Main Flow, Alternate Flows and Business Rules help, but are not required.'), el('div', 'dm-text', D.useCase));
+    var right = el('div');
+    right.append(el('div', 'dm-h', 'Then press one button'), el('p', 'dm-p', 'EasyTesting reads the use case and writes the test cases: the normal path, each field left empty, invalid values, limits, and the alternate flows you described.'));
+    right.append(btn('Write my test cases', 'primary lg', function () { show(1); }));
+    var cols = el('div', 'dm-cols'); cols.append(left, right); p.append(cols);
+  })();
+
+  // 2. Review
+  (function () {
+    var p = panels[1];
+    var all = []; D.cases.forEach(function (c) { c.steps.forEach(function (s) { all.push(s.confidence); }); });
+    p.append(el('div', 'dm-h', D.cases.length + ' test cases written for you'), el('p', 'dm-p', 'Every step shows how it was understood and how sure we are. You can edit any step, and download the lot as Excel or CSV.'));
+    var meta = el('div', 'dm-foot'); meta.style.marginTop = '0'; meta.style.marginBottom = '14px';
+    meta.append(pill(mean(all), 'Steps understood'), el('span', 'chip', all.length + ' steps'), el('span', 'chip info', 'Download as Excel or CSV'));
+    p.append(meta);
+    var list = el('div', 'dm-cases');
+    D.cases.forEach(function (c, n) {
+      var d = el('details', 'dm-case'); if (n === 0) d.open = true;
+      var sum = el('summary');
+      sum.append(el('span', 'id', c.id), el('span', 't', c.title), el('span', 'chip ' + (c.type === 'Positive' ? 'info' : c.type === 'Alternate' ? 'warn' : ''), c.type), el('span', 'chip ' + (c.basis === 'assumed' ? 'warn' : 'ok'), c.basis === 'assumed' ? 'Assumed' : 'Stated'), pill(mean(c.steps.map(function (s) { return s.confidence; }))));
+      var steps = el('div', 'dm-steps');
+      c.steps.forEach(function (s, k) { var r = el('div', 'dm-step'); r.append(el('span', 'tag', s.action), el('span', null, s.text), pill(s.confidence)); steps.append(r); });
+      d.append(sum, steps); list.append(d);
+    });
+    p.append(list);
+    var f = el('div', 'dm-foot'); f.append(btn('Run them in a real browser', 'primary', function () { show(2); }), el('span', 'dm-p', '“Stated” means your use case said it. “Assumed” means we had to guess, so a failure there is a question for you, not a bug.')); f.lastChild.style.margin = '0';
+    p.append(f);
+  })();
+
+  // 3 and 4. Runs
+  function runShell(p, heading, sub) {
+    p.append(el('div', 'dm-h', heading), el('p', 'dm-p', sub));
+    var bar = el('div', 'dm-bar'); bar.append(el('i'));
+    p.append(bar, el('div', 'dm-run'), el('div', 'dm-done'));
+  }
+  runShell(panels[2], 'Running in a real browser', 'The sample sign-in page, as it is today. Each case runs in a fresh browser, one step at a time.');
+
+  (function () {
+    var p = panels[3];
+    p.append(el('div', 'dm-h', 'A new release changes the page'), el('p', 'dm-p', 'A developer renames the Sign in button and its id. Normally every test that clicks it would stop with “element not found”. Here is the same run again, with nothing edited.'));
+    var ch = el('div', 'dm-change');
+    var a = el('div', 'site'); a.append(el('small', null, 'Before'), el('span', 'fakebtn', 'Sign in'));
+    var b = el('div', 'site'); b.append(el('small', null, 'After the release'), el('span', 'fakebtn', 'Sign in now'));
+    ch.append(a, el('div', 'go', '→'), b); p.append(ch);
+    var bar = el('div', 'dm-bar'); bar.append(el('i'));
+    p.append(bar, el('div', 'dm-run'), el('div', 'dm-done'));
+  })();
+
+  function play(runBox, run, barFill, done, which) {
+    runBox.replaceChildren(); done.replaceChildren(); barFill.style.width = '0%';
+    var totalSteps = run.reduce(function (n, r) { return n + r.steps.length; }, 0), shown = 0, delay = 0, healed = 0;
+    run.forEach(function (r, n) {
+      var meta = D.cases[n];
+      var card = el('div', 'dm-rc'), hd = el('div', 'hd'), st = el('span', 'st', '·'), lines = el('div', 'dm-rl');
+      hd.append(st, el('span', 't', meta.id + '  ' + meta.title)); card.append(hd, lines); runBox.append(card);
+      card.style.display = 'none';
+      delay += 160;
+      later(function () { card.style.display = ''; card.classList.add('running'); st.textContent = '…'; runBox.scrollTop = runBox.scrollHeight; }, delay);
+      r.steps.forEach(function (s, k) {
+        delay += 70;
+        later(function () {
+          var line = el('div'); line.append(el('i', null, '✓'), el('span', null, meta.steps[k].read));
+          if (s.via === 'healed') { line.append(el('span', 'chip warn', 'healed')); healed++; }
+          lines.append(line); shown++; barFill.style.width = Math.round((shown / totalSteps) * 100) + '%'; runBox.scrollTop = runBox.scrollHeight;
+        }, delay);
+      });
+      delay += 90;
+      later(function () { card.classList.remove('running'); card.classList.add('passed'); st.textContent = '✓'; hd.append(pill(r.confidence)); }, delay);
+    });
+    delay += 200;
+    later(function () {
+      var passed = run.filter(function (r) { return r.status === 'passed'; }).length;
+      var res = el('div', 'result-bar');
+      var b1 = el('b', null, passed + ' of ' + run.length); var s1 = el('span'); s1.append(b1, ' passed');
+      var b2 = el('b', null, mean(run.map(function (r) { return r.confidence; })) + '%'); var s2 = el('span'); s2.append(b2, ' confidence');
+      res.append(s1, s2);
+      if (which === 2) res.append(el('span', 'chip warn', healed + ' steps needed a healed locator'));
+      done.append(res);
+      if (which === 2 && D.heals.length) {
+        var h = D.heals[0], card = el('div', 'dm-heal');
+        card.append(el('b', null, 'What EasyTesting did'), (function () { var d = el('div'); d.append('Could not find ', el('code', 'k', h.was), ', so it compared the page with how the button looked before and found ', el('code', 'k', h.element), '. ', pill(h.confidence, 'Sure:'), ' ', el('span', 'chip warn', 'Review suggested')); return d; })(), el('span', null, 'It carried on instead of failing, and left the fix for you to accept. Nothing is changed in your tests until you press Apply.'));
+        done.append(card);
+      }
+      var row = el('div', 'dm-foot');
+      if (which === 1) { row.append(btn('Now the app changes', 'primary', function () { show(3); }), btn('Replay', '', function () { play(runBox, run, barFill, done, which); })); }
+      else { row.append(btn('Get started', 'primary', function () { location.hash = '#get'; }), btn('Replay', '', function () { play(runBox, run, barFill, done, which); })); }
+      done.append(row);
+    }, delay);
+  }
+
+  show(0);
+})();
+
+
+(function () {
+  // Where Get started / Sign in lead. Set appUrl in config.js to the address where EasyTesting is hosted.
+  var cfg = window.EASY_CONFIG || {};
+  var app = String(cfg.appUrl || '').replace(/\/+$/, '');
+  document.querySelectorAll('.js-signin').forEach(function (a) {
+    if (app) a.href = app + '/#/signin';
+    else a.title = 'Opens EasyTesting on this computer (http://127.0.0.1:4173), once you have started it';
+  });
+  document.querySelectorAll('.js-start').forEach(function (a) { if (app) a.href = app + '/#/signup'; });
+
+  // The demo video: a big play button over the poster, hidden once it plays.
+  var video = document.getElementById('demoVideo');
+  var wrap = video && video.parentElement;
+  var play = document.getElementById('vidPlay');
+  if (video && play) {
+    play.addEventListener('click', function () { video.play(); });
+    video.addEventListener('play', function () { wrap.classList.add('playing'); });
+    video.addEventListener('ended', function () { wrap.classList.remove('playing'); });
+  }
+})();
+
+(function () {
+  var root = document.documentElement;
+  var nav = document.querySelector('.nav');
+  window.addEventListener('scroll', function () { nav.classList.toggle('scrolled', window.scrollY > 8); }, { passive: true });
+
+  document.getElementById('theme').addEventListener('click', function () {
+    var dark = root.dataset.theme === 'dark' || (!root.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+    root.dataset.theme = dark ? 'light' : 'dark';
+    try { localStorage.setItem('et-theme', root.dataset.theme); } catch (e) {}
+  });
+
+  var links = document.getElementById('links');
+  var menu = document.getElementById('menu');
+  menu.addEventListener('click', function () {
+    var open = links.classList.toggle('open');
+    menu.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  links.addEventListener('click', function () { links.classList.remove('open'); menu.setAttribute('aria-expanded', 'false'); });
+
+  document.getElementById('copy').addEventListener('click', function (e) {
+    var lines = Array.prototype.slice.call(document.getElementById('cmds').childNodes)
+      .filter(function (n) { return n.nodeType === 3 || (n.nodeType === 1 && n.tagName === 'SPAN'); })
+      .map(function (n) { return n.textContent; }).join('');
+    var text = lines.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l && l.charAt(0) !== '#'; }).join('\n');
+    var btn = e.currentTarget;
+    var done = function (msg) { btn.textContent = msg; setTimeout(function () { btn.textContent = 'Copy'; }, 1800); };
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { done('Copied'); }, function () { done('Press Ctrl+C'); });
+    else done('Press Ctrl+C');
+  });
+
+  var items = document.querySelectorAll('.reveal');
+  if ('IntersectionObserver' in window && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) { if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); } });
+    }, { threshold: 0.12 });
+    items.forEach(function (el) { io.observe(el); });
+  } else items.forEach(function (el) { el.classList.add('in'); });
+})();
+</script>
+</body>
+</html>

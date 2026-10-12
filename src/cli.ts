@@ -6,15 +6,15 @@ import { applyInDir, loadRecords } from './apply.js';
 import type { HealRecord } from './healer.js';
 import { writeReport } from './report.js';
 
-const HELP = `heal - self-healing test runner
+const HELP = `easytesting - test cases, test runs and self-healing locators (the older command name "heal" also works)
 
-  heal run [--dir .heal] -- <test command>   run your tests; heals are recorded
-  heal report [--dir .heal]                  list heals and write .heal/report.html
-  heal apply [--dir .heal] [--approve id,id] [--min-confidence 0.8]
+  easytesting run [--dir .heal] -- <test command>   run your tests; heals are recorded
+  easytesting report [--dir .heal]                  list heals and write .heal/report.html
+  easytesting apply [--dir .heal] [--approve id,id] [--min-confidence 0.8]
                                              rewrite test files for verified heals
-  heal serve [--port 4173] [--host 127.0.0.1] [--data .heal-server] [--no-login] [--token secret] [--https] [--no-code-uploads]
+  easytesting serve [--port 4173] [--host 127.0.0.1] [--data .heal-server] [--no-login] [--token secret] [--https] [--no-code-uploads] [--signup]
                                              web app: upload tests, run them, review and apply heals
-  heal pr [--dir .heal] [--approve id,id] [--branch name] [--no-push] [--no-pr]
+  easytesting pr [--dir .heal] [--approve id,id] [--branch name] [--no-push] [--no-pr]
                                              apply, commit on a branch, push, open a pull request
 
 Only heals whose test then passed are ever applied. Heals below the auto level
@@ -78,8 +78,9 @@ function main(argv: string[]): number {
     const port = typeof f.port === 'string' ? Number(f.port) : Number(process.env.PORT) || 4173;
     void import('./server/index.js').then(({ serve }) =>
       serve({ port, host, token, accounts, secureCookies: !!f.https || process.env.HEAL_HTTPS === '1',
+        allowSignup: !!f.signup || /^(on|1|yes|true)$/i.test(process.env.HEAL_SIGNUP ?? ''),
         allowCodeUploads: !f['no-code-uploads'] && !/^(off|0|no|false)$/i.test(process.env.HEAL_CODE_UPLOADS ?? ''), dataDir: typeof f.data === 'string' ? f.data : '.heal-server' }).then(() => {
-        console.log(`Natural Healing web app: http://${host}:${port}${accounts ? '' : token ? `/?token=${token}` : ''}`);
+        console.log(`EasyTesting web app: http://${host}:${port}${accounts ? '' : token ? `/?token=${token}` : ''}`);
         if (accounts) console.log('Open it and create the first account: that person becomes the admin and can add everyone else.');
       }),
     );

@@ -9,6 +9,7 @@
   let S = null; // the test-case set being reviewed: { suite, dirty, open, reads, timers }
   let imp = null; // the upload wizard
   let codeUploads = true;
+  let signupOpen = false;
 
   const parse = async (res) => {
     let body = {};
@@ -31,30 +32,43 @@
   };
 
   /* ---------- sign in ---------- */
-  function showAuth(setup) {
+  /** mode: 'setup' (the very first account, an admin), 'signin' or 'signup' (a new tester, when the server allows it). */
+  function showAuth(setup, canSignup = false) {
     const box = $('auth');
     box.classList.remove('hidden');
-    const email = text('you@company.com');
-    const name = text('Your name');
-    const pw = el('input', { type: 'password', placeholder: 'At least 8 characters', autocomplete: setup ? 'new-password' : 'current-password' });
-    const err = el('div', { class: 'err' });
-    const go = async () => {
-      err.textContent = '';
-      try {
-        await send(setup ? '/auth/setup' : '/auth/login', { email: email.value, name: name.value, password: pw.value });
-        box.classList.add('hidden');
-        await start();
-      } catch (e) { err.textContent = e.message; }
+    // The landing page links here: #/signup for new people, #/signin for existing ones.
+    let mode = setup ? 'setup' : canSignup && location.hash === '#/signup' ? 'signup' : 'signin';
+    const draw = () => {
+      const creating = mode === 'setup' || mode === 'signup';
+      const email = text('you@company.com');
+      email.autocomplete = 'username';
+      const name = text('Your name');
+      const pw = el('input', { type: 'password', placeholder: 'At least 8 characters', autocomplete: creating ? 'new-password' : 'current-password' });
+      const err = el('div', { class: 'err' });
+      const go = async () => {
+        err.textContent = '';
+        try {
+          await send(mode === 'setup' ? '/auth/setup' : mode === 'signup' ? '/auth/register' : '/auth/login', { email: email.value, name: name.value, password: pw.value });
+          box.classList.add('hidden');
+          if (/^#\/sign(in|up)$/.test(location.hash)) location.hash = '#/';
+          await start();
+        } catch (e) { err.textContent = e.message; }
+      };
+      pw.onkeydown = (e) => { if (e.key === 'Enter') go(); };
+      const tabs = canSignup && mode !== 'setup' ? el('div', { class: 'authtabs' },
+        el('button', { class: mode === 'signin' ? 'on' : '', text: 'Sign in', onclick: () => { mode = 'signin'; draw(); } }),
+        el('button', { class: mode === 'signup' ? 'on' : '', text: 'Create account', onclick: () => { mode = 'signup'; draw(); } })) : null;
+      const intro = { setup: 'Create the first account. This person becomes the admin and can add everyone else.', signup: 'Free to set up. You will be able to write, run and review test cases in a minute.', signin: location.hash === '#/signup' && !canSignup ? 'Accounts here are created by your admin. Sign in with the one you were given.' : 'Welcome back. Sign in to see your test cases and runs.' }[mode];
+      box.replaceChildren(el('div', { class: 'box' },
+        el('h1', { text: mode === 'setup' ? 'Welcome to EasyTesting' : mode === 'signup' ? 'Create your account' : 'Sign in' }),
+        el('p', { text: intro }), tabs,
+        field('Email', email), creating ? field('Your name', name) : null, field('Password', pw), err,
+        el('button', { class: 'btn primary big', text: creating ? 'Create account' : 'Sign in', onclick: go })));
+      email.focus();
     };
-    pw.onkeydown = (e) => { if (e.key === 'Enter') go(); };
-    box.replaceChildren(el('div', { class: 'box' },
-      el('h1', { text: setup ? 'Welcome to Natural Healing' : 'Sign in' }),
-      el('p', { text: setup ? 'Create the first account. This person becomes the admin and can add everyone else.' : 'Use the account your admin created for you.' }),
-      field('Email', email), setup ? field('Your name', name) : null, field('Password', pw), err,
-      el('button', { class: 'btn primary big', text: setup ? 'Create account' : 'Sign in', onclick: go })));
-    email.focus();
+    draw();
   }
-  Ext.auth = () => { if (accounts && $('auth').classList.contains('hidden')) showAuth(false); };
+  Ext.auth = () => { if (accounts && $('auth').classList.contains('hidden')) showAuth(false, signupOpen); };
 
   function renderUser() {
     const chip = $('userChip');
@@ -70,7 +84,8 @@
     accounts = st.accounts;
     me = st.user;
     codeUploads = st.codeUploads !== false;
-    if (accounts && !me) return showAuth(st.setup);
+    signupOpen = !!st.signup;
+    if (accounts && !me) return showAuth(st.setup, signupOpen);
     renderUser();
     if (!codeUploads) {
       // Uploading test code is off on this server: keep the release demo, drop the upload form.

@@ -1,7 +1,7 @@
 {
-  "name": "naturalhealing",
+  "name": "easytesting",
   "version": "0.1.0",
-  "description": "Self-healing locator engine for end-to-end tests (Playwright and Selenium adapters)",
+  "description": "EasyTesting: describe what your app should do, get test cases, run them in a real browser, and let broken locators heal themselves (Playwright and Selenium).",
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -31,6 +31,7 @@
     "typescript": "^5.6.0"
   },
   "bin": {
+    "easytesting": "dist/cli.js",
     "heal": "dist/cli.js"
   },
   "main": "dist/index.js",

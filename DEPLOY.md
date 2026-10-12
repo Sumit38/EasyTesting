@@ -1,6 +1,6 @@
-# Hosting Natural Healing for a team
+# Hosting EasyTesting for a team
 
-Natural Healing starts real browsers, runs for minutes, and keeps its data (accounts, bugs, fingerprints, screenshots) in files. It needs a small **always-on server that can run a container**. It will not work on serverless platforms such as Vercel or Netlify Functions: there is no browser, runs are cut off after a short time, and the disk is wiped between requests. (Vercel is fine for hosting the *app you want to test*.)
+EasyTesting starts real browsers, runs for minutes, and keeps its data (accounts, bugs, fingerprints, screenshots) in files. It needs a small **always-on server that can run a container**. It will not work on serverless platforms such as Vercel or Netlify Functions: there is no browser, runs are cut off after a short time, and the disk is wiped between requests. (Vercel is fine for hosting the *app you want to test*.)
 
 ## Quick start with Docker
 
@@ -19,6 +19,7 @@ The data lives in the `heal-data` volume (`/data` in the container). Back it up 
 | `PORT` | `8080` | Port to listen on. Hosts such as Railway and Render set this for you. |
 | `HEAL_HTTPS` | `0` | Set to `1` when the app is reached over HTTPS, so the sign-in cookie is marked Secure. |
 | `HEAL_MAX_RUNS` | `3` | How many test runs execute at once. Others wait as "queued". Each run starts a browser, so size this to the machine (about 1 GB of memory per run is a safe guess). |
+| `HEAL_SIGNUP` | off | `on` lets anyone create their own tester account from the sign-in screen (the landing page's **Get started** button opens it). Off means only an admin can add people. New accounts are always testers, and one address can create at most 5 an hour. Turn it on only when you are happy for strangers to start browser runs on your server, and keep `HEAL_MAX_RUNS` small. |
 | `HEAL_CODE_UPLOADS` | `off` in the container | `on` lets people upload Playwright/Selenium projects. That runs *their code on this machine*. Leave it off on any shared server. |
 | `ANTHROPIC_API_KEY` | none | Enables "Improve with AI" for writing test cases. The use-case text is sent to Anthropic. Never put the key in the repo; set it in the host's secret settings. |
 | `HEAL_AI_MODEL` | `claude-opus-5-5` | Which Claude model to use for that option. |
@@ -44,5 +45,5 @@ Any host that runs a container and gives it a persistent disk:
 ```sh
 npm ci && npm run build
 npx playwright-core install --with-deps chromium
-HEAL_CODE_UPLOADS=off node dist/cli.js serve --host 0.0.0.0 --port 8080 --data /var/lib/natural-healing
+HEAL_CODE_UPLOADS=off node dist/cli.js serve --host 0.0.0.0 --port 8080 --data /var/lib/easytesting
 ```

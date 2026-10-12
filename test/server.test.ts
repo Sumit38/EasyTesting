@@ -78,7 +78,7 @@ describe('web app', () => {
 
   it('serves the UI', async () => {
     const res = await fetch(base + '/');
-    assert.match(await res.text(), /Natural Healing/);
+    assert.match(await res.text(), /EasyTesting/);
   });
 
   it('refuses a zip that tries to write outside the project', async () => {

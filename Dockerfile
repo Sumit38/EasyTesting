@@ -1,6 +1,6 @@
-# Natural Healing in a container: the web app plus Chromium for running tests.
-# Build:  docker build -t natural-healing .
-# Run:    docker run -p 8080:8080 -v heal-data:/data natural-healing
+# EasyTesting in a container: the web app plus Chromium for running tests.
+# Build:  docker build -t easytesting .
+# Run:    docker run -p 8080:8080 -v heal-data:/data easytesting
 FROM node:24-bookworm-slim
 
 ENV NODE_ENV=production \

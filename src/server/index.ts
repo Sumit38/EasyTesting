@@ -25,6 +25,8 @@ export interface ServerOptions {
   accounts?: boolean;
   /** Mark the session cookie Secure (set this when serving over HTTPS). */
   secureCookies?: boolean;
+  /** Let anyone create their own tester account from the sign-in screen. Off by default: accounts are made by an admin. */
+  allowSignup?: boolean;
   /** Allow uploading test code (Playwright/Selenium projects), which runs on this machine. Turn off on a shared server. Default true. */
   allowCodeUploads?: boolean;
   /** How many runs may execute at once. */
@@ -39,6 +41,8 @@ const FRAMEWORKS: Framework[] = ['playwright', 'selenium', 'custom'];
 export function createApp(opts: ServerOptions = {}): { server: Server; runs: RunManager } {
   const runs = new RunManager({ dataDir: opts.dataDir ?? '.heal-server', timeoutMs: opts.timeoutMs, maxConcurrent: opts.maxConcurrent });
   const codeUploads = opts.allowCodeUploads !== false;
+  /** Sign-ups per address in the last hour, so one visitor cannot fill the server with accounts. */
+  const signups = new Map<string, number[]>();
   const noCode = () => httpError(403, 'Uploading test code is turned off on this server. Use a use case or test cases instead.');
   const maxUpload = opts.maxUploadBytes ?? 100 * 1024 * 1024;
   const auth = new Auth(runs.app.db);
@@ -78,7 +82,7 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
 
     if (path === '/api/auth/state' && method === 'GET') {
       const me = opts.accounts ? auth.fromRequest(req) : SYSTEM;
-      return json(res, 200, { accounts: !!opts.accounts, setup: !!opts.accounts && auth.userCount() === 0, user: me ?? null, codeUploads });
+      return json(res, 200, { accounts: !!opts.accounts, setup: !!opts.accounts && auth.userCount() === 0, user: me ?? null, codeUploads, signup: !!opts.accounts && !!opts.allowSignup });
     }
     if (opts.accounts) {
       // The cookie is SameSite=Strict; this also refuses any state-changing request (sign-in and sign-out included) that names another site as its origin.
@@ -88,6 +92,16 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
         if (auth.userCount() > 0) throw httpError(403, 'Setup is already done. Sign in instead.');
         const b = JSON.parse((await readBody(req, 10_000)).toString() || '{}');
         auth.create({ email: b.email, name: b.name, password: b.password, role: 'admin' });
+        return signIn(res, await auth.login(b.email, b.password, ip), !!opts.secureCookies);
+      }
+      if (path === '/api/auth/register' && method === 'POST') {
+        if (!opts.allowSignup) throw httpError(403, 'Creating your own account is turned off here. Ask your admin to add you.');
+        if (auth.userCount() === 0) throw httpError(409, 'Create the first (admin) account on the sign-in screen first.');
+        const recent = (signups.get(ip) ?? []).filter((t) => Date.now() - t < 3_600_000);
+        if (recent.length >= 5) throw httpError(429, 'Too many accounts were created from this address. Try again later.');
+        const b = JSON.parse((await readBody(req, 10_000)).toString() || '{}');
+        auth.create({ email: b.email, name: b.name, password: b.password, role: 'tester' }); // always a tester, never an admin
+        signups.set(ip, [...recent, Date.now()]);
         return signIn(res, await auth.login(b.email, b.password, ip), !!opts.secureCookies);
       }
       if (path === '/api/auth/login' && method === 'POST') {
