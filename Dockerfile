@@ -3,11 +3,11 @@
 # Run:    docker run -p 8080:8080 -v heal-data:/data easytesting
 FROM node:24-bookworm-slim
 
+# HEAL_CODE_UPLOADS=off: a shared server should not run uploaded code. Set to "on" only on a machine you trust.
 ENV NODE_ENV=production \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PORT=8080 \
     HOST=0.0.0.0 \
-    # A shared server should not run uploaded code. Set to "on" only on a machine you trust.
     HEAL_CODE_UPLOADS=off
 
 WORKDIR /app
