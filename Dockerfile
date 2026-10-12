@@ -25,7 +25,6 @@ RUN npm run build && npm prune --omit=dev
 # Run as a normal user, with the data folder owned by it.
 RUN useradd --create-home --uid 10001 app && mkdir -p /data && chown -R app:app /data
 USER app
-VOLUME /data
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
