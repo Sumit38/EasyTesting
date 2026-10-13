@@ -63,7 +63,8 @@ export class Auth {
 
   create(input: { email: string; name: string; password: string; role?: 'admin' | 'tester' }): User {
     const email = String(input.email ?? '').trim().toLowerCase();
-    const name = String(input.name ?? '').trim() || email.split('@')[0];
+    const name = (String(input.name ?? '').trim() || email.split('@')[0]).slice(0, 80);
+    if (email.length > 120) throw new AuthError('That email address is too long.');
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new AuthError('Enter a valid email address.');
     if (String(input.password ?? '').length < 8) throw new AuthError('The password needs at least 8 characters.');
     if (this.db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) throw new AuthError('An account with that email already exists.', 409);

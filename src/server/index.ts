@@ -11,6 +11,7 @@ import { SuiteStore, type Suite } from './suites.js';
 import { writeXlsx } from './xlsx.js';
 import { randomBytes } from 'node:crypto';
 import { Auth, AuthError, clearCookie, cookie, COOKIE, sessionCookie, type User } from './auth.js';
+import { blockedReason } from '../exec/guard.js';
 import { DEMO_TEST_DATA, DEMO_USE_CASE, demoPage } from './demo.js';
 import { RunManager, type Framework } from './runs.js';
 
@@ -31,6 +32,12 @@ export interface ServerOptions {
   allowCodeUploads?: boolean;
   /** How many runs may execute at once. */
   maxConcurrent?: number;
+  /** How many runs one person may have waiting or running. */
+  maxPerUser?: number;
+  /** The server sits behind a proxy (Railway, Render, a load balancer): take the visitor's address from the proxy's headers, not the connection. */
+  trustProxy?: boolean;
+  /** Test cases may only open public websites. Turn on for any server other people use. */
+  blockPrivateTargets?: boolean;
   timeoutMs?: number;
   maxUploadBytes?: number;
 }
@@ -39,10 +46,37 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const FRAMEWORKS: Framework[] = ['playwright', 'selenium', 'custom'];
 
 export function createApp(opts: ServerOptions = {}): { server: Server; runs: RunManager } {
-  const runs = new RunManager({ dataDir: opts.dataDir ?? '.heal-server', timeoutMs: opts.timeoutMs, maxConcurrent: opts.maxConcurrent });
+  const runs = new RunManager({ dataDir: opts.dataDir ?? '.heal-server', timeoutMs: opts.timeoutMs, maxConcurrent: opts.maxConcurrent, maxPerUser: opts.maxPerUser, blockPrivateTargets: opts.blockPrivateTargets });
   const codeUploads = opts.allowCodeUploads !== false;
   /** Sign-ups per address in the last hour, so one visitor cannot fill the server with accounts. */
   const signups = new Map<string, number[]>();
+  const SIGNUPS_PER_HOUR_ALL = 100;
+  /** Uses of the AI helper per person in the last hour: each one costs the server owner money. */
+  const aiUses = new Map<number, number[]>();
+  const AI_PER_HOUR = Number(process.env.HEAL_AI_PER_HOUR) || 30;
+  const aiAllowed = (userId: number) => {
+    const recent = (aiUses.get(userId) ?? []).filter((t) => Date.now() - t < 3_600_000);
+    if (recent.length >= AI_PER_HOUR) throw httpError(429, `You have used the AI helper ${AI_PER_HOUR} times in the last hour. Try again later, or use the standard generator.`);
+    aiUses.set(userId, [...recent, Date.now()]);
+  };
+  /** Starting a run: one person cannot fill the queue, and the address must be one this server may test. */
+  const mayRun = async (owner: number | undefined, appUrl?: string) => {
+    if (owner && runs.busyFor(owner) >= runs.maxPerUser) throw httpError(429, `You already have ${runs.maxPerUser} runs waiting or running. Wait for one to finish, or stop one.`);
+    if (appUrl && opts.blockPrivateTargets) {
+      const why = await blockedReason(appUrl);
+      if (why) throw httpError(400, why);
+    }
+  };
+  /** The visitor's address. Behind a proxy the connection is the proxy itself, so every visitor would otherwise share one sign-up and sign-in limit. */
+  const clientIp = (req: IncomingMessage): string => {
+    if (opts.trustProxy) {
+      const real = String(req.headers['x-real-ip'] ?? '').trim();
+      if (real) return real;
+      const forwarded = String(req.headers['x-forwarded-for'] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+      if (forwarded.length) return forwarded[forwarded.length - 1];
+    }
+    return req.socket.remoteAddress ?? '';
+  };
   const noCode = () => httpError(403, 'Uploading test code is turned off on this server. Use a use case or test cases instead.');
   const maxUpload = opts.maxUploadBytes ?? 100 * 1024 * 1024;
   const auth = new Auth(runs.app.db);
@@ -54,11 +88,18 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
   const SYSTEM: User = { id: 0, email: 'local', name: 'Local user', role: 'admin' };
 
   const server = createServer(async (req, res) => {
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('referrer-policy', 'no-referrer');
     try {
       await route(req, res);
     } catch (e) {
+      if (e instanceof SyntaxError) return json(res, 400, { error: 'The request was not valid JSON.' });
       const status = e instanceof AuthError ? e.status : ((e as { status?: number }).status ?? 500);
-      json(res, status, { error: (e as Error).message });
+      // An unexpected failure is logged for the owner; the visitor does not need file paths or internals.
+      if (status === 500) console.error(e);
+      if (res.headersSent) return res.end();
+      json(res, status, { error: status === 500 ? 'Something went wrong on the server. Try again, and tell the admin if it keeps happening.' : (e as Error).message });
     }
   });
 
@@ -77,7 +118,7 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
     if (!path.startsWith('/api/')) return serveStatic(res, path);
 
     const tokenOk = !!opts.token && (req.headers.authorization === `Bearer ${opts.token}` || url.searchParams.get('token') === opts.token);
-    const ip = req.socket.remoteAddress ?? '';
+    const ip = clientIp(req);
     let user: User | undefined;
 
     if (path === '/api/auth/state' && method === 'GET') {
@@ -87,7 +128,7 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
     if (opts.accounts) {
       // The cookie is SameSite=Strict; this also refuses any state-changing request (sign-in and sign-out included) that names another site as its origin.
       const origin = req.headers.origin;
-      if (method !== 'GET' && method !== 'HEAD' && origin && new URL(origin).host !== req.headers.host) throw httpError(403, 'Cross-site request refused.');
+      if (method !== 'GET' && method !== 'HEAD' && origin && originHost(origin) !== req.headers.host) throw httpError(403, 'Cross-site request refused.');
       if (path === '/api/auth/setup' && method === 'POST') {
         if (auth.userCount() > 0) throw httpError(403, 'Setup is already done. Sign in instead.');
         const b = JSON.parse((await readBody(req, 10_000)).toString() || '{}');
@@ -97,8 +138,10 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
       if (path === '/api/auth/register' && method === 'POST') {
         if (!opts.allowSignup) throw httpError(403, 'Creating your own account is turned off here. Ask your admin to add you.');
         if (auth.userCount() === 0) throw httpError(409, 'Create the first (admin) account on the sign-in screen first.');
+        for (const [k, v] of signups) if (!v.some((t) => Date.now() - t < 3_600_000)) signups.delete(k);
         const recent = (signups.get(ip) ?? []).filter((t) => Date.now() - t < 3_600_000);
         if (recent.length >= 5) throw httpError(429, 'Too many accounts were created from this address. Try again later.');
+        if ([...signups.values()].reduce((n, v) => n + v.length, 0) >= SIGNUPS_PER_HOUR_ALL) throw httpError(429, 'Many accounts were created in the last hour. Try again later.');
         const b = JSON.parse((await readBody(req, 10_000)).toString() || '{}');
         auth.create({ email: b.email, name: b.name, password: b.password, role: 'tester' }); // always a tester, never an admin
         signups.set(ip, [...recent, Date.now()]);
@@ -165,6 +208,7 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
       const b = await json_<{ steps?: string[] }>(200_000);
       const client = await defaultClient();
       if (!client) throw httpError(409, 'The AI helper is not set up on this server (no ANTHROPIC_API_KEY).');
+      aiAllowed(me.id);
       try {
         const better = await improveSteps((b.steps ?? []).map(String), client);
         return json(res, 200, { steps: better.map(interpret) });
@@ -193,6 +237,7 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
       const text = String(b.text ?? '').trim();
       if (text.length < 20) throw httpError(400, 'Paste or upload a use case first. It needs at least a few sentences.');
       if (text.length > 60_000) throw httpError(413, 'That use case is too long. Split it into several use cases.');
+      if (b.method === 'ai' && aiConfigured()) aiAllowed(me.id);
       const out = await generate(text, { method: b.method === 'ai' ? 'ai' : 'rules', startPage: b.startPage?.trim() || undefined, testData: parseTestData(b.testData) });
       const title = (b.title?.trim() || out.useCase.title || 'Generated test cases').slice(0, 120);
       const sv = suites.create(me.id, { title, source: 'generated', usecaseId: suites_useCase(me.id, title, text), appUrl: String(b.appUrl ?? '').trim(), cases: out.cases });
@@ -228,6 +273,7 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
         if (!/^https?:\/\/\S+$/i.test(appUrl)) throw httpError(400, 'Enter the app link, starting with http:// or https://');
         const runnable = sv.cases.filter((c) => c.steps.length);
         if (!runnable.length) throw httpError(400, 'None of these test cases has any steps to run.');
+        await mayRun(owner, appUrl);
         if (appUrl !== sv.appUrl) suites.update(sv.id, { appUrl });
         return json(res, 202, runs.createCases({ title: sv.title, appUrl, cases: sv.cases, owner, suite: sv.id }));
       }
@@ -268,16 +314,18 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
       return json(res, 201, { suite: suiteView(sv), warnings });
     }
 
-    if (path === '/api/runs' && method === 'GET') return json(res, 200, runs.list().filter(mine).map((r) => ({ ...r, ...runs.summary(r.id) })));
+    if (path === '/api/runs' && method === 'GET') return json(res, 200, runs.list().filter(mine).slice(0, 200).map((r) => ({ ...r, ...runs.summary(r.id) })));
 
     if (path === '/api/demo' && method === 'POST') {
       const v = ['2', '3'].includes(url.searchParams.get('version') ?? '') ? url.searchParams.get('version')! : '1';
       const origin = `http://127.0.0.1:${req.socket.localPort}`;
+      await mayRun(owner);
       return json(res, 202, await runs.createDemo(`${origin}/demo/app?v=${v}`, v, owner));
     }
 
     if (path === '/api/runs' && method === 'POST') {
       if (!codeUploads) throw noCode();
+      await mayRun(owner);
       const framework = (url.searchParams.get('framework') ?? 'playwright') as Framework;
       if (!FRAMEWORKS.includes(framework)) throw httpError(400, `framework must be one of ${FRAMEWORKS.join(', ')}`);
       const filename = url.searchParams.get('filename') ?? 'tests.zip';
@@ -318,6 +366,7 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
       if (action === 'report' && method === 'GET') return json(res, 200, runs.report(id));
       if (action === 'rerun' && method === 'POST') {
         if (!codeUploads && !run.kind && !run.demo) throw noCode();
+        await mayRun(owner, run.kind === 'cases' ? run.appUrl : undefined);
         return json(res, 202, await runs.rerun(id));
       }
       if (action === 'scenarios' && method === 'GET') return json(res, 200, runs.scenarios(run.project));
@@ -426,6 +475,15 @@ const describeNode = (n: import('../model.js').UINode) => `<${n.tag}> ${n.role !
 function signIn(res: ServerResponse, s: { user: User; token: string }, secure: boolean) {
   res.setHeader('set-cookie', sessionCookie(s.token, secure));
   return json(res, 200, { user: s.user });
+}
+
+/** The host of an Origin header, or undefined when it is not an address (a page opened from a file sends "null"). */
+function originHost(origin: string): string | undefined {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return undefined;
+  }
 }
 
 function httpError(status: number, message: string) {

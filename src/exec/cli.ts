@@ -23,7 +23,7 @@ if (!appUrl) {
 
 try {
   const { results, passed } = await runCases({
-    cases, appUrl, healDir, storeFile: process.env.HEAL_STORE ?? join(healDir, 'fingerprints.db'), log: (l) => console.log(l),
+    cases, appUrl, healDir, blockPrivate: process.env.HEAL_BLOCK_PRIVATE === '1', storeFile: process.env.HEAL_STORE ?? join(healDir, 'fingerprints.db'), log: (l) => console.log(l),
   });
   const count = (s: string) => results.filter((r) => r.status === s).length;
   console.log(`\n${results.length} test cases: ${count('passed')} passed, ${count('failed')} failed, ${count('skipped')} skipped${count('blocked') ? `, ${count('blocked')} blocked (a page would not load)` : ''}.`);

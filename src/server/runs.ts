@@ -102,6 +102,12 @@ export interface RunManagerOptions {
   maxConcurrent?: number;
   /** Kill a run that takes longer than this. */
   timeoutMs?: number;
+  /** Test cases may only open public websites (not this machine, a private network or files). Turn on for any shared server. */
+  blockPrivateTargets?: boolean;
+  /** How many runs one person may have waiting or running at once. Default 3, or HEAL_MAX_USER_RUNS. */
+  maxPerUser?: number;
+  /** Finished runs older than this many days are deleted, with their screenshots and logs. Default 30, or HEAL_KEEP_DAYS; 0 keeps everything. */
+  keepDays?: number;
 }
 
 /** Stores uploaded test projects, runs them with healing switched on, and reads back what was healed. */
@@ -113,12 +119,16 @@ export class RunManager {
   private readonly procs = new Map<string, ChildProcess>();
   private readonly maxConcurrent: number;
   private active = 0;
+  private readonly blockPrivate: boolean;
+  readonly maxPerUser: number;
   private readonly waiting: (() => void)[] = [];
 
   constructor(opts: RunManagerOptions) {
     this.dir = resolve(opts.dataDir);
     this.timeoutMs = opts.timeoutMs ?? 15 * 60_000;
     this.maxConcurrent = Math.max(1, opts.maxConcurrent ?? (Number(process.env.HEAL_MAX_RUNS) || 3));
+    this.blockPrivate = !!opts.blockPrivateTargets;
+    this.maxPerUser = Math.max(1, opts.maxPerUser ?? (Number(process.env.HEAL_MAX_USER_RUNS) || 3));
     mkdirSync(join(this.dir, 'runs'), { recursive: true });
     this.app = new AppDb(join(this.dir, 'app.db'));
     this.app.importLegacy(this.dir);
@@ -126,6 +136,41 @@ export class RunManager {
     for (const r of this.list()) {
       if (['queued', 'installing', 'running'].includes(r.status)) this.save({ ...r, status: 'error', finishedAt: new Date().toISOString() });
     }
+    const keep = opts.keepDays ?? (process.env.HEAL_KEEP_DAYS === undefined ? 30 : Number(process.env.HEAL_KEEP_DAYS));
+    if (keep > 0) {
+      this.prune(keep);
+      setInterval(() => this.prune(keep), 6 * 3_600_000).unref();
+    }
+  }
+
+  /** Runs this person has waiting or running. */
+  busyFor(owner: number | undefined): number {
+    return owner ? this.list().filter((r) => r.owner === owner && ACTIVE.includes(r.status)).length : 0;
+  }
+
+  /** Deletes finished runs older than `days`, so screenshots and logs do not fill the disk. Returns how many went. */
+  prune(days: number): number {
+    const cutoff = Date.now() - days * 86_400_000;
+    let n = 0;
+    for (const r of this.list()) {
+      if (ACTIVE.includes(r.status) || Date.parse(r.finishedAt ?? r.createdAt) >= cutoff) continue;
+      rmSync(this.runDir(r.id), { recursive: true, force: true });
+      n++;
+    }
+    return n;
+  }
+
+  /** Starts a run in the background. A failure to start is logged, never left as an unhandled rejection that would end the server. */
+  private launch(run: Run, extraEnv: NodeJS.ProcessEnv = {}) {
+    this.start(run, extraEnv).catch((e) => {
+      if (!this.get(run.id)) return; // deleted while it waited
+      console.error(`[runs] ${run.id} could not run: ${(e as Error).message}`);
+      try {
+        this.finish(run, 'error');
+      } catch {
+        /* the run folder is gone */
+      }
+    });
   }
 
   private runDir = (id: string) => join(this.dir, 'runs', id);
@@ -192,7 +237,7 @@ export class RunManager {
       writeFileSync(this.logFile(id), `Could not unpack the upload: ${(e as Error).message}\n`);
       return this.get(id)!;
     }
-    void this.start(run);
+    this.launch(run);
     return run;
   }
 
@@ -213,7 +258,7 @@ export class RunManager {
     symlinkSync(modules, join(project, 'node_modules'), 'junction');
     if (!this.app.hasScenarios(run.project)) this.app.setScenarios(run.project, DEMO_SCENARIOS_CSV, parseScenarios(DEMO_SCENARIOS_CSV));
     this.save(run);
-    void this.start(run, { DEMO_CHANNEL: (await browserChannel()) ?? '' });
+    this.launch(run, { DEMO_CHANNEL: (await browserChannel()) ?? '' });
     return run;
   }
 
@@ -228,7 +273,7 @@ export class RunManager {
     mkdirSync(this.healDir(id), { recursive: true });
     writeFileSync(join(this.projectDir(id), 'cases.json'), JSON.stringify({ title: input.title, appUrl: input.appUrl, cases: input.cases }, null, 2));
     this.save(run);
-    void this.start(run);
+    this.launch(run);
     return run;
   }
 
@@ -263,7 +308,7 @@ export class RunManager {
     mkdirSync(this.healDir(nid), { recursive: true });
     cpSync(this.projectDir(id), this.projectDir(nid), { recursive: true, filter: (src) => basename(src) !== 'node_modules' });
     this.save(run);
-    void this.start(run);
+    this.launch(run);
     return run;
   }
 
@@ -294,6 +339,7 @@ export class RunManager {
 
   private async execute(run: Run, extraEnv: NodeJS.ProcessEnv) {
     const log = createWriteStream(this.logFile(run.id), { flags: 'a' });
+    log.on('error', () => undefined); // a full disk must not end the server
     // Zips often wrap everything in one top-level folder; run from there.
     const cwd = projectRoot(this.projectDir(run.id));
     const env: NodeJS.ProcessEnv = {
@@ -306,6 +352,12 @@ export class RunManager {
       CI: '1',
       ...extraEnv,
     };
+    if (run.kind === 'cases') {
+      // The built-in runner needs none of the server's secrets, and a test case must never be able to read them.
+      delete env.ANTHROPIC_API_KEY;
+      delete env.HEAL_TOKEN;
+      if (this.blockPrivate) env.HEAL_BLOCK_PRIVATE = '1';
+    }
     const exec = (command: string, healing = false) =>
       new Promise<{ code: number | null; timedOut: boolean }>((done) => {
         const childEnv = healing ? { ...env, NODE_OPTIONS: [process.env.NODE_OPTIONS, healingNodeOptions()].filter(Boolean).join(' ') } : env;

@@ -11,6 +11,7 @@ import type { Fingerprint, Snapshot, UINode } from '../model.js';
 import { FingerprintStore } from '../store.js';
 import type { TestCase } from '../cases/model.js';
 import { parseStep, type ParsedStep } from '../cases/steps.js';
+import { blockedReason } from './guard.js';
 import { fitsHint, rank, type Ranked } from './resolve.js';
 
 export interface RunOptions {
@@ -21,6 +22,8 @@ export interface RunOptions {
   headless?: boolean;
   /** How long a step may look for its element or its expected result. */
   stepTimeout?: number;
+  /** Refuse any address that is not on the public internet (this machine, private networks, files). On for shared servers. */
+  blockPrivate?: boolean;
   log?: (line: string) => void;
 }
 
@@ -91,6 +94,13 @@ async function gotoWithRetry(page: Page, url: string): Promise<void> {
   throw new StepError(`The page ${url} did not load: ${(last as Error).message.split('\n')[0]}`, undefined, 'environment');
 }
 
+/** Opens a page, after checking the address is one this server allows. */
+async function openPage(page: Page, url: string, ctx: Ctx): Promise<void> {
+  const why = ctx.blockPrivate ? await blockedReason(url) : /^https?:/i.test(url) ? undefined : `Only http:// and https:// addresses can be tested, not ${url.split(':')[0]}:`;
+  if (why) throw new StepError(why, undefined, 'environment');
+  await gotoWithRetry(page, url);
+}
+
 /** The first browser Playwright can start here: Chrome, Edge, then its own Chromium. */
 export async function launchBrowser(headless = true): Promise<Browser> {
   let last: unknown;
@@ -144,6 +154,10 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
       const label = `${c.id} ${c.title}`;
       log(`\n▶ ${label}`);
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      if (opts.blockPrivate) {
+        // Every request, including redirects and the files a page loads, not only the addresses a step names.
+        await context.route('**/*', async (route) => ((await blockedReason(route.request().url())) ? route.abort('blockedbyclient') : route.continue()));
+      }
       const page = await context.newPage();
       page.on('dialog', (d) => void d.accept().catch(() => undefined));
       healer.setTest(label);
@@ -169,7 +183,7 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
           continue;
         }
         try {
-          await doStep(page, parsed, { base, appUrl: opts.appUrl, healer, index, coverage, key: `step::${c.id}::${i}::${norm(parsed.target ?? '')}`, timeout, r });
+          await doStep(page, parsed, { base, appUrl: opts.appUrl, blockPrivate: !!opts.blockPrivate, healer, index, coverage, key: `step::${c.id}::${i}::${norm(parsed.target ?? '')}`, timeout, r });
           r.status = 'passed';
           r.confidence = Math.min(parsed.confidence, r.resolveConfidence);
           log(`  ✔ ${i + 1}. ${shown(text)}${r.via && r.via !== 'saved' ? `  [${r.via}]` : ''}  (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
@@ -249,6 +263,7 @@ function writeResults(dir: string, results: CaseResult[]) {
 interface Ctx {
   base: URL;
   appUrl: string;
+  blockPrivate: boolean;
   healer: AutoHealer;
   index: FingerprintStore;
   coverage: CoverageRecorder;
@@ -429,10 +444,10 @@ async function doStep(page: Page, p: ParsedStep, ctx: Ctx): Promise<void> {
   switch (p.action) {
     case 'open': {
       if (p.value) {
-        const url = /^https?:\/\//i.test(p.value) ? p.value : new URL(p.value, base).href;
-        await gotoWithRetry(page, url);
+        const url = /^[a-z][a-z0-9+.-]*:/i.test(p.value) ? p.value : new URL(p.value, base).href;
+        await openPage(page, url, ctx);
       } else {
-        if (page.url() === 'about:blank') await gotoWithRetry(page, ctx.appUrl);
+        if (page.url() === 'about:blank') await openPage(page, ctx.appUrl, ctx);
         if (p.target) {
           // "Go to the Billing page": follow a link of that name if the page has one, otherwise we are already there.
           const snap = await snapshot(page);

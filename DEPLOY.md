@@ -20,6 +20,11 @@ The data lives in the `heal-data` volume (`/data` in the container). Back it up 
 | `HEAL_HTTPS` | `0` | Set to `1` when the app is reached over HTTPS, so the sign-in cookie is marked Secure. |
 | `HEAL_MAX_RUNS` | `3` | How many test runs execute at once. Others wait as "queued". Each run starts a browser, so size this to the machine (about 1 GB of memory per run is a safe guess). |
 | `HEAL_SIGNUP` | off | `on` lets anyone create their own tester account from the sign-in screen (the landing page's **Get started** button opens it). Off means only an admin can add people. New accounts are always testers, and one address can create at most 5 an hour. Turn it on only when you are happy for strangers to start browser runs on your server, and keep `HEAL_MAX_RUNS` small. |
+| `HEAL_MAX_USER_RUNS` | `3` | How many runs one person may have waiting or running. Stops one account from filling the queue. |
+| `HEAL_KEEP_DAYS` | `30` | Finished runs, with their screenshots and logs, are deleted after this many days so the disk does not fill. `0` keeps everything. |
+| `HEAL_AI_PER_HOUR` | `30` | How many times one person can use the AI helper per hour (each use costs you money). |
+| `HEAL_TRUST_PROXY` | on with `HEAL_HTTPS=1` | Read each visitor's address from the proxy's headers. Without it, everyone behind Railway or Render shares one sign-up and sign-in limit. Set `0` to turn off if the server is reached directly. |
+| `HEAL_BLOCK_PRIVATE` | on unless local | Test cases may only open public websites, never the server itself, a private network or cloud metadata addresses. Set `0` only on a trusted machine. |
 | `HEAL_CODE_UPLOADS` | `off` in the container | `on` lets people upload Playwright/Selenium projects. That runs *their code on this machine*. Leave it off on any shared server. |
 | `ANTHROPIC_API_KEY` | none | Enables "Improve with AI" for writing test cases. The use-case text is sent to Anthropic. Never put the key in the repo; set it in the host's secret settings. |
 | `HEAL_AI_MODEL` | `claude-opus-5-5` | Which Claude model to use for that option. |

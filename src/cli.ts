@@ -12,7 +12,7 @@ const HELP = `easytesting - test cases, test runs and self-healing locators (the
   easytesting report [--dir .heal]                  list heals and write .heal/report.html
   easytesting apply [--dir .heal] [--approve id,id] [--min-confidence 0.8]
                                              rewrite test files for verified heals
-  easytesting serve [--port 4173] [--host 127.0.0.1] [--data .heal-server] [--no-login] [--token secret] [--https] [--no-code-uploads] [--signup]
+  easytesting serve [--port 4173] [--host 127.0.0.1] [--data .heal-server] [--no-login] [--token secret] [--https] [--trust-proxy] [--no-code-uploads] [--signup]
                                              web app: upload tests, run them, review and apply heals
   easytesting pr [--dir .heal] [--approve id,id] [--branch name] [--no-push] [--no-pr]
                                              apply, commit on a branch, push, open a pull request
@@ -76,8 +76,18 @@ function main(argv: string[]): number {
       return 2;
     }
     const port = typeof f.port === 'string' ? Number(f.port) : Number(process.env.PORT) || 4173;
+    // One bad request or a full disk must not take the whole server, and everyone's runs, down with it.
+    process.on('unhandledRejection', (e) => console.error('[server] unhandled rejection:', e));
+    process.on('uncaughtException', (e) => console.error('[server] uncaught exception:', e));
+    const on = (v: string | undefined) => /^(on|1|yes|true)$/i.test(v ?? '');
+    const https = !!f.https || process.env.HEAL_HTTPS === '1';
+    const loopback = host === '127.0.0.1' || host === 'localhost';
     void import('./server/index.js').then(({ serve }) =>
-      serve({ port, host, token, accounts, secureCookies: !!f.https || process.env.HEAL_HTTPS === '1',
+      serve({ port, host, token, accounts, secureCookies: https,
+        // Behind an HTTPS proxy every visitor arrives from the proxy's address unless the proxy's headers are read.
+        trustProxy: !!f['trust-proxy'] || on(process.env.HEAL_TRUST_PROXY) || (https && process.env.HEAL_TRUST_PROXY !== '0'),
+        // A server other people reach must not let a test open its own files or private network. Always on unless it is local.
+        blockPrivateTargets: process.env.HEAL_BLOCK_PRIVATE === '0' ? false : accounts && (!loopback || on(process.env.HEAL_BLOCK_PRIVATE)),
         allowSignup: !!f.signup || /^(on|1|yes|true)$/i.test(process.env.HEAL_SIGNUP ?? ''),
         allowCodeUploads: !f['no-code-uploads'] && !/^(off|0|no|false)$/i.test(process.env.HEAL_CODE_UPLOADS ?? ''), dataDir: typeof f.data === 'string' ? f.data : '.heal-server' }).then(() => {
         console.log(`EasyTesting web app: http://${host}:${port}${accounts ? '' : token ? `/?token=${token}` : ''}`);
