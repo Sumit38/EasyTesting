@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { AutoHealer } from '../auto/auto-healer.js';
@@ -33,7 +33,8 @@ export interface StepResult {
   action: ParsedStep['action'];
   target?: string;
   value?: string;
-  status: 'passed' | 'failed' | 'skipped';
+  /** 'pending' and 'running' only while the run is in progress. */
+  status: 'passed' | 'failed' | 'skipped' | 'pending' | 'running';
   /** The failure was the page not loading (site or network), not something the app did wrong. */
   environment?: boolean;
   /** The step itself could not be run as written (not understood, or no text to type): a problem with the test case, not the app. */
@@ -58,7 +59,7 @@ export interface CaseResult {
   id: string;
   title: string;
   /** 'blocked': a page would not load, so the case could not be judged either way. */
-  status: 'passed' | 'failed' | 'skipped' | 'blocked';
+  status: 'passed' | 'failed' | 'skipped' | 'blocked' | 'pending' | 'running';
   steps: StepResult[];
   /** 0-100: mean confidence of the steps that ran. */
   confidence: number;
@@ -147,12 +148,33 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
   const index = new FingerprintStore(opts.storeFile); // step -> the selector that worked last time
   const coverage = new CoverageRecorder(opts.healDir);
   const results: CaseResult[] = [];
+  // What the screen shows while the run is going: every case and step, waiting until it has run.
+  const live: CaseResult[] = opts.cases.map((c) => ({
+    id: c.id, title: c.title, status: c.steps.length ? 'pending' : 'skipped', confidence: 0, durationMs: 0, assumed: c.basis === 'assumed' || undefined,
+    understanding: Math.round((c.steps.reduce((a, t) => a + parseStep(t).confidence, 0) / Math.max(1, c.steps.length)) * 100),
+    steps: c.steps.map((text, index) => {
+      const p = parseStep(text);
+      return { index, text, action: p.action, target: p.target, value: p.value, status: 'pending' as const, parseConfidence: p.confidence, resolveConfidence: 1, confidence: p.confidence, notes: [...p.notes], ms: 0 };
+    }),
+  }));
+  let shotAt = 0;
+  const publish = (current?: { case: number; step: number }) => writeProgress(opts.healDir, { cases: live, running: true, current, live: shotAt ? 'live.png' : undefined, liveAt: shotAt || undefined });
+  const snapLive = async (page: Page) => {
+    try {
+      await page.screenshot({ path: join(opts.healDir, 'shots', 'live.png'), timeout: 3000 });
+      shotAt = Date.now();
+    } catch {
+      /* no picture this time */
+    }
+  };
+  publish();
   const browser = await launchBrowser(opts.headless !== false && process.env.HEADED !== '1');
   const base = new URL(opts.appUrl);
 
   try {
-    for (const c of opts.cases) {
+    for (const [k, c] of opts.cases.entries()) {
       const started = Date.now();
+      if (c.steps.length) live[k].status = 'running';
       const label = `${c.id} ${c.title}`;
       log(`\n▶ ${label}`);
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -175,7 +197,10 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
           resolveConfidence: 1, confidence: parsed.confidence, notes: [...parsed.notes], ms: 0,
         };
         steps.push(r);
+        live[k].steps[i] = r;
         if (failed) continue;
+        r.status = 'running';
+        publish({ case: k, step: i });
         if (parsed.action === 'unknown') {
           failed = true;
           r.status = 'failed';
@@ -220,6 +245,8 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
         }
         r.ms = Date.now() - t0;
         await coverage.visit(pageLike(page)).catch(() => undefined);
+        if (r.status === 'passed') await snapLive(page);
+        publish({ case: k, step: i });
       }
 
       await context.close().catch(() => undefined);
@@ -233,12 +260,14 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
         assumed: c.basis === 'assumed' || undefined,
         advice: failedStep ? adviceFor(failedStep, c.basis === 'assumed') : undefined,
       });
+      live[k] = results[results.length - 1];
+      publish();
     }
   } finally {
     await browser.close().catch(() => undefined);
   }
 
-  writeResults(opts.healDir, results);
+  writeResults(opts.healDir, results, shotAt ? { live: 'live.png', liveAt: shotAt } : {});
   return { results, passed: results.every((r) => r.status === 'passed' || r.status === 'skipped') };
 }
 
@@ -258,7 +287,19 @@ function pageLike(page: Page): PageLike {
   return { url: () => page.url(), title: () => page.title(), snapshot: () => probe.snapshot() };
 }
 
-function writeResults(dir: string, results: CaseResult[]) {
+/** The run so far, for the screen. Written to a temporary file and renamed, so a reader never sees half a file. */
+function writeProgress(dir: string, data: unknown) {
+  try {
+    mkdirSync(dir, { recursive: true });
+    const tmp = join(dir, 'steps.json.tmp');
+    writeFileSync(tmp, JSON.stringify(data));
+    renameSync(tmp, join(dir, 'steps.json'));
+  } catch {
+    /* the screen misses one update; the run goes on */
+  }
+}
+
+function writeResults(dir: string, results: CaseResult[], extra: { live?: string; liveAt?: number } = {}) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, 'results.json'),
@@ -271,7 +312,7 @@ function writeResults(dir: string, results: CaseResult[]) {
       })),
     }, null, 2),
   );
-  writeFileSync(join(dir, 'steps.json'), JSON.stringify({ cases: results }, null, 2));
+  writeFileSync(join(dir, 'steps.json'), JSON.stringify({ cases: results, ...extra }, null, 2));
 }
 
 interface Ctx {

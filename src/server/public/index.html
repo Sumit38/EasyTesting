@@ -282,6 +282,28 @@
   .stepres:first-child { border-top: 0; } .stepres .ic { font-weight: 800; } .stepres.passed .ic { color: var(--ok); } .stepres.failed .ic { color: var(--bad); } .stepres.skipped .ic { color: var(--muted); }
   .stepres .sub { grid-column: 2 / 4; font-size: 12px; color: var(--muted); } .stepres .err { grid-column: 2 / 4; color: var(--bad); font-size: 13px; margin: 0; min-height: 0; }
   .stepres img { max-width: 260px; border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; display: block; }
+  .stepres { grid-template-columns: 22px minmax(0, 1fr) auto; }
+  .stepres .what { min-width: 0; overflow-wrap: anywhere; }
+  .stepres .st { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; margin-right: 8px; }
+  .stepres.passed .st { color: var(--ok); } .stepres.failed .st { color: var(--bad); } .stepres.skipped .st, .stepres.pending .st { color: var(--muted); } .stepres.running .st { color: var(--info); }
+  .stepres.pending { color: var(--muted); } .stepres.pending .ic { color: var(--line); }
+  .stepres.running { background: var(--info-soft); border-radius: 8px; padding-left: 6px; padding-right: 6px; } .stepres.running .ic { color: var(--info); animation: pulse 1.2s infinite; }
+  /* Live progress of a test-case run */
+  .prog { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 340px); gap: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 18px 20px; margin-top: 16px; }
+  @media (max-width: 820px) { .prog { grid-template-columns: minmax(0, 1fr); } }
+  .prog h2 { margin: 0 0 4px; font-size: 20px; } .prog .now { color: var(--muted); font-size: 14px; margin: 0 0 12px; overflow-wrap: anywhere; }
+  .prog.done-ok { border-left: 5px solid var(--ok); } .prog.done-bad { border-left: 5px solid var(--bad); } .prog.done-warn { border-left: 5px solid var(--warn); } .prog.going { border-left: 5px solid var(--info); }
+  .segs { display: flex; gap: 3px; height: 12px; margin: 4px 0 10px; }
+  .segs span { flex: 1; border-radius: 3px; background: var(--line); min-width: 3px; }
+  .segs .passed { background: var(--ok); } .segs .failed { background: var(--bad); } .segs .blocked { background: var(--warn); } .segs .skipped { background: var(--muted); opacity: .45; } .segs .running { background: var(--info); animation: pulse 1.2s infinite; }
+  .counts { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14px; } .counts b { font-size: 16px; }
+  .counts .ok { color: var(--ok); } .counts .bad { color: var(--bad); } .counts .warn { color: var(--warn); } .counts .mute { color: var(--muted); }
+  .livebox { margin: 0; } .livebox img { width: 100%; border: 1px solid var(--line); border-radius: 10px; display: block; background: var(--panel-2); aspect-ratio: 16 / 10; object-fit: cover; object-position: top; }
+  .livebox figcaption { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .livebox .blank { aspect-ratio: 16 / 10; border: 1px dashed var(--line); border-radius: 10px; display: grid; place-items: center; color: var(--muted); font-size: 13px; text-align: center; padding: 10px; }
+  details.logwrap > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 10px; }
+  details.logwrap > summary::-webkit-details-marker { display: none; }
+  details.logwrap > summary h3::before { content: '▸ '; color: var(--muted); } details.logwrap[open] > summary h3::before { content: '▾ '; }
   .guided { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; background: var(--brand-soft); border-radius: 14px; padding: 14px 18px; margin-top: 14px; }
   .guided b { font-size: 20px; } .guided span { color: var(--muted); font-size: 13px; display: block; }
   .stepline button.mini { align-self: start; margin-top: 4px; }
@@ -436,8 +458,10 @@
   <div id="heals"></div>
   <p class="hint" id="healHint"></p>
 
-  <div class="bar"><h3>Run log</h3><span class="spacer"></span><button class="btn" id="copyLog">Copy</button></div>
-  <pre class="log" id="log"></pre>
+  <details class="logwrap" id="logWrap" open>
+    <summary class="bar"><h3 id="logTitle">Run log</h3><span class="spacer"></span><button class="btn" id="copyLog">Copy</button></summary>
+    <pre class="log" id="log"></pre>
+  </details>
 </div>
 
 <!-- REPORT -->

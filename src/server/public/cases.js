@@ -525,51 +525,122 @@
     paintSummary();
   }
 
-  /* ---------- results of a test-case run ---------- */
+  /* ---------- results of a test-case run, live while it runs ---------- */
   let stepsSig = '';
+  let shownRun = '';
+  // Plain words for each state, for people who have never seen a test log.
+  const CASE_WORD = { passed: ['Passed', 'ok'], failed: ['Failed', 'bad'], blocked: ['Blocked', 'warn'], skipped: ['Not run', 'mute'], running: ['Running now', 'info live'], pending: ['Waiting', 'mute'] };
+  const STEP_WORD = { passed: ['✔', 'Done'], failed: ['✖', 'Failed'], running: ['●', 'Running now'], pending: ['○', 'Waiting'], skipped: ['–', 'Not run'] };
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
   Ext.afterRun.push(async (run) => {
     const isCases = run.kind === 'cases';
+    const active = ['queued', 'installing', 'running'].includes(run.status);
     $('download').classList.toggle('hidden', isCases);
     if (isCases) $('apply').classList.add('hidden');
-    const heading = document.querySelector('#view-run .bar h3');
-    if (heading) heading.textContent = isCases ? 'Locators that changed (healed automatically)' : 'Locator fixes';
+    // The locator tiles and the Install phase mean nothing for test cases written in plain English.
+    $('phases').classList.toggle('hidden', isCases);
+    $('tiles').classList.toggle('hidden', isCases);
+    // That note talks about locators and the log; the progress card says how a test-case run went, in plain words.
+    $('verdict').classList.toggle('hidden', isCases);
+    const heading = $('heals').previousElementSibling.querySelector('h3');
+    if (heading) heading.textContent = isCases ? 'Elements that changed on the page (found again automatically)' : 'Locator fixes';
+    if (shownRun !== run.id) {
+      shownRun = run.id;
+      // The raw log is for developers. Testers get the checklist; the log is one click away.
+      $('logWrap').open = !isCases;
+      $('logTitle').textContent = isCases ? 'Technical log (for developers)' : 'Run log';
+    }
     const box = $('runSteps');
     if (!isCases) { box.replaceChildren(); stepsSig = ''; return; }
     let data;
     try { data = await get('/runs/' + run.id + '/steps'); } catch { return; }
-    const sig = run.id + JSON.stringify(data);
+    const sig = run.id + run.status + JSON.stringify(data);
     if (sig === stepsSig) return;
     stepsSig = sig;
     const open = new Set([...box.querySelectorAll('details[open]')].map((d) => d.dataset.id));
-    const first = box.children.length === 0;
-    const cases = data.cases;
-    const done = cases.filter((c) => c.status !== 'skipped');
+    // A fresh look when the page opens on a run, and again the moment the run ends: then only the failures stay open.
+    const going = active || !!data.running;
+    const first = box.children.length === 0 || box.dataset.run !== run.id || (box.dataset.going === '1' && !going);
+    box.dataset.run = run.id;
+    box.dataset.going = going ? '1' : '0';
+    const cases = data.cases || [];
+    const count = (st) => cases.filter((c) => c.status === st).length;
+    const passed = count('passed'), failed = count('failed'), blocked = count('blocked'), notRun = count('skipped');
+    const finished = passed + failed + blocked + notRun;
+    const cur = data.current && cases[data.current.case];
+    const curStep = cur && cur.steps[data.current.step];
+
+    // The headline: what is happening now, or how it went, in one sentence.
+    let title, now, tone;
+    if (!cases.length) {
+      title = active ? 'Getting ready…' : 'No results'; now = active ? 'Starting the browser and opening your app.' : 'The run stopped before any test case started. Open the technical log below to see why.'; tone = active ? 'going' : 'done-bad';
+    } else if (active || data.running) {
+      title = `Running test case ${Math.min(finished + 1, cases.length)} of ${cases.length}`;
+      now = cur ? `${cur.id} · ${cur.title}${curStep ? ` — step ${curStep.index + 1} of ${cur.steps.length}: ${curStep.text}` : ''}` : run.status === 'queued' ? 'Waiting for a free slot on the server…' : 'Starting…';
+      tone = 'going';
+    } else {
+      title = failed || blocked ? `${passed} of ${cases.length} test cases passed` : `All ${plural(cases.length, 'test case', 'test cases')} passed`;
+      const firstBad = cases.find((c) => c.status === 'failed' || c.status === 'blocked');
+      now = firstBad ? `${firstBad.id} ${firstBad.status === 'blocked' ? 'was blocked' : 'failed'}: ${(firstBad.steps.find((s) => s.status === 'failed') || {}).error || firstBad.advice || ''}` : 'Every step did what the test case said, on the real app.';
+      tone = failed ? 'done-bad' : blocked ? 'done-warn' : 'done-ok';
+    }
+    const liveSrc = data.live ? `/api/runs/${run.id}/shots/${data.live}?t=${data.liveAt || ''}` : '';
+    const shot = active || data.running
+      ? el('figure', { class: 'livebox' }, liveSrc ? el('img', { src: liveSrc, alt: 'What the test browser shows now' }) : el('div', { class: 'blank', text: 'The browser picture appears after the first step.' }),
+        el('figcaption', { text: liveSrc ? 'What the test browser shows now (updates after every step)' : '' }))
+      : el('figure', { class: 'livebox' }, liveSrc ? el('img', { src: liveSrc, alt: 'The page at the end of the run' }) : el('div', { class: 'blank', text: 'No picture of the page was taken.' }),
+        el('figcaption', { text: liveSrc ? 'The page after the last step that worked' : '' }));
+
+    const done = cases.filter((c) => ['passed', 'failed', 'blocked'].includes(c.status));
     box.replaceChildren(
-      el('div', { class: 'bar' }, el('h3', { text: 'Test cases' })),
-      cases.length ? el('div', { class: 'guided' },
-        el('div', {}, el('b', { text: pct(mean(done.map((c) => c.confidence / 100))) + '%' }), el('span', { text: 'confidence in these results' })),
-        el('div', {}, el('b', { text: pct(mean(done.map((c) => c.understanding / 100))) + '%' }), el('span', { text: 'steps understood' })),
-        el('div', {}, el('b', { text: `${cases.filter((c) => c.status === 'passed').length} of ${cases.length}` }), el('span', { text: 'test cases passed' })),
-        el('div', { style: 'flex:1;min-width:220px;font-size:13px;color:var(--muted)', text: 'Confidence is how sure we are that a result is right: it drops when a step was only partly understood, or when an element was found by guesswork rather than by name.' })) : null,
-      el('div', { style: 'margin-top:12px' }, ...cases.map((c) => {
-        const d = el('details', { class: 'case', 'data-id': c.id });
+      el('div', { class: 'prog ' + tone },
+        el('div', {},
+          el('h2', { text: title }),
+          el('p', { class: 'now', text: now }),
+          el('div', { class: 'segs', title: 'One block per test case' }, ...cases.map((c) => el('span', { class: c.status, title: `${c.id}: ${(CASE_WORD[c.status] || [c.status])[0]}` }))),
+          el('div', { class: 'counts' },
+            el('span', { class: 'ok' }, el('b', { text: '✔ ' + passed }), ' passed'),
+            el('span', { class: 'bad' }, el('b', { text: '✖ ' + failed }), ' failed'),
+            blocked ? el('span', { class: 'warn' }, el('b', { text: '⏸ ' + blocked }), ' blocked (page would not load)') : null,
+            notRun ? el('span', { class: 'mute' }, el('b', { text: '– ' + notRun }), ' not run') : null,
+            cases.length - finished ? el('span', { class: 'mute' }, el('b', { text: '○ ' + (cases.length - finished) }), active || data.running ? ' to go' : ' did not finish') : null),
+          !active && !data.running && done.length ? el('div', { class: 'guided', style: 'margin-top:14px' },
+            el('div', {}, el('b', { text: pct(mean(done.map((c) => c.confidence / 100))) + '%' }), el('span', { text: 'confidence in these results' })),
+            el('div', {}, el('b', { text: pct(mean(done.map((c) => c.understanding / 100))) + '%' }), el('span', { text: 'steps understood' })),
+            el('div', { style: 'flex:1;min-width:200px;font-size:13px;color:var(--muted)', text: 'Confidence drops when a step was only partly understood, or when an element was found by guesswork rather than by its name.' })) : null),
+        shot),
+      el('div', { class: 'bar' }, el('h3', { text: 'Test cases, step by step' })),
+      el('div', {}, ...cases.map((c) => {
+        const [word, cls] = CASE_WORD[c.status] || [c.status, 'mute'];
+        const d = el('details', { class: 'case' });
         d.dataset.id = c.id;
-        d.open = first ? c.status === 'failed' || cases.length <= 3 : open.has(c.id);
+        // Open what matters: the case running now, and failures when the run is over.
+        d.open = c.status === 'running' || (first ? c.status === 'failed' || c.status === 'blocked' || cases.length <= 2 : open.has(c.id));
+        const ranSteps = c.steps.filter((s) => s.status === 'passed').length;
         d.append(
-          el('summary', {}, el('span', { class: 'badge b-' + (c.status === 'passed' ? 'ok' : c.status === 'failed' ? 'bad' : 'warn'), text: c.status }), el('b', { text: c.id }), el('span', { text: c.title }),
-            el('span', { class: 'spacer' }), confPill(c.confidence / 100, 'confidence')),
+          el('summary', {}, el('span', { class: 'badge b-' + cls, text: word }), el('b', { text: c.id }), el('span', { text: c.title }),
+            el('span', { class: 'spacer' }), el('span', { class: 'hint', text: `${ranSteps} of ${c.steps.length} steps done` }),
+            ['passed', 'failed', 'blocked'].includes(c.status) ? confPill(c.confidence / 100, 'confidence') : null),
           el('div', { class: 'body2' },
             c.advice ? el('div', { class: 'note', text: c.advice }) : null,
-            el('div', {}, ...c.steps.map((s) => el('div', { class: 'stepres ' + s.status },
-              el('span', { class: 'ic', text: s.status === 'passed' ? '✔' : s.status === 'failed' ? '✖' : '–' }),
-              el('span', {}, s.text, s.via && s.via !== 'saved' ? el('span', { class: 'tag', style: 'margin-left:8px', text: s.via === 'healed' ? 'healed' : 'found by name' }) : null),
-              s.status === 'skipped' ? el('span') : confPill(s.confidence),
-              s.matchedAs || s.notes.length ? el('div', { class: 'sub', text: [s.matchedAs ? 'Used ' + s.matchedAs : '', ...s.notes.slice(0, 2)].filter(Boolean).join(' · ') }) : null,
-              s.error ? el('div', { class: 'err', text: s.error }) : null,
-              s.screenshot ? el('a', { href: `/api/runs/${run.id}/shots/${s.screenshot}`, target: '_blank' }, el('img', { src: `/api/runs/${run.id}/shots/${s.screenshot}`, alt: 'The page when this step failed' })) : null)))));
+            el('div', {}, ...c.steps.map((s) => {
+              const [ic, label] = STEP_WORD[s.status] || ['–', s.status];
+              const why = s.status === 'skipped' && c.steps.some((x) => x.status === 'failed' && x.index < s.index) ? 'Not run: an earlier step failed' : label;
+              return el('div', { class: 'stepres ' + s.status },
+                el('span', { class: 'ic', text: ic }),
+                el('span', { class: 'what' }, el('span', { class: 'st', text: why }), s.text, s.via && s.via !== 'saved' ? el('span', { class: 'tag', style: 'margin-left:8px', text: s.via === 'healed' ? 'element changed, found again' : 'found by its name' }) : null),
+                s.status === 'passed' || s.status === 'failed' ? el('span', { class: 'hint', text: (s.ms / 1000).toFixed(1) + 's' }) : el('span'),
+                s.status === 'passed' && s.matchedAs ? el('div', { class: 'sub', text: 'Used ' + s.matchedAs }) : null,
+                s.error ? el('div', { class: 'err', text: s.error }) : null,
+                s.alternatives && s.alternatives.length ? el('div', { class: 'sub', text: 'Closest matches on the page: ' + s.alternatives.slice(0, 4).join(' · ') }) : null,
+                s.screenshot ? el('a', { href: `/api/runs/${run.id}/shots/${s.screenshot}`, target: '_blank' }, el('img', { src: `/api/runs/${run.id}/shots/${s.screenshot}`, alt: 'The page when this step failed' })) : null);
+            }))));
         return d;
       })));
   });
+  // The Copy button sits in the log's heading; copying must not also fold the log away.
+  $('copyLog').addEventListener('click', (e) => e.preventDefault());
 
   Ext.afterReport.push((r) => {
     if (!r.guided) return;

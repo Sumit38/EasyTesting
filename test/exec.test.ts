@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -116,5 +116,25 @@ describe('running plain-English test cases', () => {
     const { results } = await runCases({ cases, appUrl: `${origin}/demo/login?v=2`, healDir: join(dir, 'h5'), storeFile: store, stepTimeout: 4000 });
     assert.deepEqual(results.filter((r) => r.status !== 'passed').map((r) => r.id), [], '\n' + summary(results));
     assert.equal(loadRecords(join(dir, 'h5')).length, 0, 'nothing left to heal');
+  });
+
+  it('shows its progress while it runs: every case and step from the start, then each one as it finishes', async () => {
+    const heal = join(dir, 'h9');
+    const seen: { statuses: string[]; running: boolean }[] = [];
+    const peek = () => {
+      try {
+        const now = JSON.parse(readFileSync(join(heal, 'steps.json'), 'utf8'));
+        seen.push({ statuses: now.cases.map((c: CaseResult) => c.status), running: !!now.running });
+      } catch { /* not written yet */ }
+    };
+    const two = cases.slice(0, 2);
+    const { results } = await runCases({ cases: two, appUrl: `${origin}/demo/login?v=1`, healDir: heal, storeFile: join(dir, 'p.db'), stepTimeout: 4000, log: (l) => (l.startsWith('\n▶') ? peek() : undefined) });
+    assert.deepEqual(seen[0], { statuses: ['pending', 'pending'], running: true }, 'before the first case, both are listed as waiting');
+    assert.deepEqual(seen[1], { statuses: ['passed', 'pending'], running: true }, 'when the second starts, the first is already shown as passed');
+    const end = JSON.parse(readFileSync(join(heal, 'steps.json'), 'utf8'));
+    assert.equal(end.running, undefined, 'the finished file is not marked as running');
+    assert.equal(end.live, 'live.png', 'the last picture of the page is kept');
+    assert.ok(existsSync(join(heal, 'shots', 'live.png')));
+    assert.deepEqual(end.cases.map((c: CaseResult) => c.status), results.map((r) => r.status));
   });
 });
