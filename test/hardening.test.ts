@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -154,5 +154,32 @@ describe('old runs', () => {
     assert.equal(existsSync(join(dir, 'runs', 'aaaaaaaaaaaa')), false);
     assert.equal(existsSync(join(dir, 'runs', 'bbbbbbbbbbbb')), true);
     assert.equal(existsSync(join(dir, 'runs', 'cccccccccccc')), true);
+  });
+});
+
+describe('a step that cannot run as written', () => {
+  let site: Server;
+  let origin = '';
+  before(async () => {
+    site = createServer((req, res) => {
+      const u = new URL(req.url ?? '/', 'http://x');
+      const page = demoPage(u.pathname, u.searchParams.get('v') ?? '1');
+      res.writeHead(page ? 200 : 404, { 'content-type': 'text/html' });
+      res.end(page ?? 'not found');
+    });
+    await new Promise<void>((r) => site.listen(0, '127.0.0.1', r));
+    origin = `http://127.0.0.1:${(site.address() as AddressInfo).port}`;
+  });
+  after(() => site.close());
+
+  it('stops with a clear message and is reported as not run, never as a bug in the app', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'novalue-'));
+    const cases: TestCase[] = [{ id: 'NV-1', title: 'Sign in', steps: ['Open the application', 'Enter valid password', 'Click the Sign in button'], expected: '' }];
+    const { results } = await runCases({ cases, appUrl: `${origin}/demo/login?v=1`, healDir: dir, storeFile: join(dir, 'fp.db'), stepTimeout: 3000 });
+    assert.equal(results[0].status, 'failed');
+    assert.match(results[0].steps[1].error ?? '', /not what to type/);
+    assert.equal(results[0].steps[2].status, 'skipped', 'nothing after it runs');
+    const reported = JSON.parse(readFileSync(join(dir, 'results.json'), 'utf8')).tests[0];
+    assert.equal(reported.status, 'skipped');
   });
 });

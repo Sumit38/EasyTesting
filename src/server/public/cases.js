@@ -215,6 +215,17 @@
 
   /* ---------- upload wizard ---------- */
   const FIELD_LABEL = { id: 'ID', title: 'Title', area: 'Area / module', priority: 'Priority', type: 'Type', preconditions: 'Preconditions', steps: 'Steps (required)', expected: 'Expected result', basis: 'Basis (stated / assumed)' };
+  const FIELD_HELP = {
+    id: 'The test case number, for example TC-01. If your file has none, choose (none) and we number the cases for you.',
+    title: 'The short name of the test case, for example "Log in with a wrong password". Shown in the results and reports.',
+    area: 'Which part of the app the case tests, for example Login or Checkout. Optional: it groups the results.',
+    priority: 'High, Medium or Low. Optional: a failure in a High case becomes a high-severity bug in the report.',
+    type: 'Positive, Negative, Boundary and so on. Optional: shown as a label on each case.',
+    preconditions: 'What must be true before step 1, for example "The user is logged out". Optional: shown with the case, not run.',
+    steps: 'Required. The column with what to do, for example "Click the Login button". One step per line in the cell, or one step per row. These are the steps we run.',
+    expected: 'What should happen at the end, for example "The dashboard opens". Optional, but it makes the report easier to read.',
+    basis: 'Only for files this tool wrote: whether the expected result came from the use case (Stated) or was a guess (Assumed). For your own files, leave it on (none).',
+  };
   function renderImport() { imp = { step: 1 }; drawImport(); }
   function drawImport() {
     const box = $('view-import');
@@ -244,15 +255,45 @@
     }
     // step 2: match columns
     const selects = {};
+    const first = imp.preview[0] || [];
+    const confirmBtn = el('button', { class: 'btn primary big', text: 'Continue: read my steps' });
+    const stepsWarn = el('div', { class: 'err' });
+    const checkSteps = () => {
+      const missing = Number(selects.steps.value) < 0;
+      selects.steps.closest('.mapfield').classList.toggle('missing', missing);
+      stepsWarn.textContent = missing ? 'Choose the column that holds the steps. It is the only one we need, because the steps are what we run.' : '';
+      confirmBtn.disabled = missing;
+    };
     const mapGrid = el('div', { class: 'mapgrid' }, ...imp.fields.map((f) => {
-      const sel = el('select', {}, el('option', { value: -1, text: '(none)' }), ...imp.header.map((h, i) => el('option', { value: i, text: `${String.fromCharCode(65 + (i % 26))}: ${h || '(blank)'}`, selected: imp.mapping[f] === i })));
+      const sel = el('select', {}, el('option', { value: -1, text: '(none) — my file has no such column' }), ...imp.header.map((h, i) => el('option', { value: i, text: `${String.fromCharCode(65 + (i % 26))}: ${h || '(blank)'}`, selected: imp.mapping[f] === i })));
+      sel.setAttribute('aria-label', FIELD_LABEL[f]);
       selects[f] = sel;
-      return field(FIELD_LABEL[f], sel);
+      const sample = el('div', { class: 'mapsample' });
+      const showSample = () => {
+        const i = Number(sel.value);
+        const v = i >= 0 ? String(first[i] || '').replace(/\s+/g, ' ').trim() : '';
+        sample.textContent = i < 0 ? (f === 'steps' ? '' : 'Not used.') : v ? 'Row 1: ' + v : 'Row 1: (empty)';
+        sample.title = v;
+      };
+      sel.onchange = () => { showSample(); if (f === 'steps') checkSteps(); };
+      showSample();
+      const tip = el('div', { class: 'tipbox hidden', text: FIELD_HELP[f] });
+      const info = el('button', { type: 'button', class: 'info', text: 'i', title: FIELD_HELP[f] });
+      info.setAttribute('aria-label', 'What goes in ' + FIELD_LABEL[f] + '?');
+      info.setAttribute('aria-expanded', 'false');
+      info.onclick = () => { const open = tip.classList.toggle('hidden') === false; info.setAttribute('aria-expanded', String(open)); };
+      return el('div', { class: 'mapfield' + (f === 'steps' ? ' req' : '') }, el('div', { class: 'maplabel' }, el('span', { text: FIELD_LABEL[f] }), info), sel, sample, tip);
     }));
+    const guide = el('div', { class: 'guide' },
+      el('b', { text: 'How to match the columns' }),
+      el('ol', {},
+        el('li', { text: 'Each box below is one part of a test case. Its list shows the columns of your file (A, B, C… with their headings).' }),
+        el('li', { text: 'For each box, pick the column that holds that part. We already guessed from your headings; check the "Row 1" preview under each box.' }),
+        el('li', { text: 'Only Steps is required. If your file has no column for something, leave it on "(none)".' }),
+        el('li', {}, 'Not sure what a box means? Click its ', el('b', { text: 'i' }), ' button.')));
     const title = text('', imp.title);
     const app = text('https://staging.yourapp.com', imp.app || '');
     const err = el('div', { class: 'err' });
-    const confirmBtn = el('button', { class: 'btn primary big', text: 'Continue: read my steps' });
     confirmBtn.onclick = async () => {
       err.textContent = '';
       confirmBtn.disabled = true;
@@ -270,18 +311,20 @@
         el('p', { class: 'sub', style: 'margin-left:0', text: imp.hasHeader ? 'The first row looks like headings. We guessed which column is which. Fix anything that is wrong.' : 'There is no heading row, so choose the columns below.' }),
         el('div', { class: 'tblwrap' }, el('table', { class: 'tbl' }, el('thead', {}, el('tr', {}, ...imp.header.map((h) => el('th', { text: h })))),
           el('tbody', {}, ...imp.preview.map((r) => el('tr', {}, ...imp.header.map((_, i) => el('td', { text: (r[i] || '').slice(0, 120) }))))))),
+        guide,
         mapGrid,
-        el('div', { class: 'adv' }, field('Name this set', title), field('App link (optional now, needed to run)', app)),
+        stepsWarn,
+        el('div', { class: 'adv' }, field('Name this set', title), field('App link (optional now, needed to run)', app, 'The website to test, starting with https://. You can also add it on the next screen.')),
         el('div', { class: 'cta' }, confirmBtn, el('button', { class: 'btn', text: 'Start over', onclick: renderImport }), err)));
+    checkSteps();
   }
 
   /* ---------- review, edit, download and run one set ---------- */
   const strip = (suite) => suite.cases.map((c) => ({ id: c.id, title: c.title, area: c.area, priority: c.priority, type: c.type, preconditions: c.preconditions, steps: c.steps, expected: c.expected, source: c.source }));
-  const allSteps = () => S.suite.cases.flatMap((c) => c.interpreted);
 
   async function renderSuite(id) {
     const suite = await get('/suites/' + id);
-    S = { suite, dirty: false, open: new Set(suite.cases.filter((c) => c.interpreted.some((s) => s.confidence < 0.6)).map((c) => c.id)), reads: {}, timers: {} };
+    S = { suite, dirty: false, open: new Set(suite.cases.filter((c) => c.interpreted.some((s) => s.confidence < 0.6)).map((c) => c.id)), reads: {}, timers: {}, tickets: {}, badges: {} };
     if (S.open.size === 0 && suite.cases[0]) S.open.add(suite.cases[0].id);
     drawSuite();
   }
@@ -321,13 +364,39 @@
   function reinterpret(c) {
     clearTimeout(S.timers[c.id]);
     S.timers[c.id] = setTimeout(async () => {
+      // Only the newest answer counts: a slow reply to an older keystroke must not overwrite a newer one.
+      const ticket = (S.tickets[c.id] = (S.tickets[c.id] || 0) + 1);
+      const sent = c.steps.slice();
       try {
-        const out = await send('/steps/interpret', { steps: c.steps });
+        const out = await send('/steps/interpret', { steps: sent });
+        if (ticket !== S.tickets[c.id] || S.suite.cases.indexOf(c) === -1) return;
         c.interpreted = out.steps;
-        (S.reads[c.id] || []).forEach((box, i) => { if (box && c.interpreted[i]) paintRead(box, c.interpreted[i], c.id, i); });
-        paintSummary();
+        repaintCase(c);
       } catch { /* try again on the next keystroke */ }
-    }, 350);
+    }, 300);
+  }
+
+  /** Updates everything that shows how a case's steps were read: each step, its row colour, the case's badge and the totals. */
+  function repaintCase(c) {
+    (S.reads[c.id] || []).forEach((box, i) => {
+      const it = c.interpreted[i];
+      if (!box || !it) return;
+      paintRead(box, it, c.id, i);
+      const row = box.parentElement;
+      const filled = (c.steps[i] || '').trim();
+      if (row) row.className = 'stepline' + (filled && it.confidence < 0.6 ? ' weak' : '') + (filled && it.action === 'unknown' ? ' bad' : '');
+    });
+    paintCaseBadge(c);
+    paintSummary();
+  }
+
+  const filledSteps = (c) => c.interpreted.filter((s, i) => (c.steps[i] || '').trim());
+  function paintCaseBadge(c) {
+    const slot = S.badges[c.id];
+    if (!slot) return;
+    const steps = filledSteps(c);
+    const weak = steps.filter((s) => s.confidence < 0.6).length;
+    slot.replaceChildren(!steps.length ? el('span', { class: 'pill low', text: 'no steps' }) : weak ? el('span', { class: 'pill mid', text: weak + ' to check' }) : confPill(mean(steps.map((s) => s.confidence))));
   }
 
   function markDirty() {
@@ -347,7 +416,8 @@
   function paintSummary() {
     const box = $('suiteTiles');
     if (!box) return;
-    const steps = allSteps();
+    // Blank steps (a line just added, not yet written) are not counted: they would pull the score down to 0 for no reason.
+    const steps = S.suite.cases.flatMap(filledSteps);
     const weak = steps.filter((s) => s.confidence < 0.6).length;
     box.replaceChildren(
       tileEl(String(S.suite.cases.length), 'Test cases', `${steps.length} steps`),
@@ -356,7 +426,6 @@
   }
 
   function caseCard(c) {
-    const weak = c.interpreted.filter((s) => s.confidence < 0.6).length;
     const reads = [];
     S.reads[c.id] = reads;
     const stepsBox = el('div');
@@ -370,11 +439,11 @@
         paintRead(read, it, c.id, i);
         const row = el('div', { class: 'stepline' + (it.confidence < 0.6 && st.trim() ? ' weak' : '') + (it.action === 'unknown' && st.trim() ? ' bad' : '') },
           el('div', { class: 'n', text: String(i + 1) }), input,
-          el('button', { class: 'mini', text: '✕', title: 'Remove this step', onclick: () => { c.steps.splice(i, 1); c.interpreted.splice(i, 1); markDirty(); drawSteps(); reinterpret(c); paintSummary(); } }), read);
+          el('button', { class: 'mini', text: '✕', title: 'Remove this step', onclick: () => { c.steps.splice(i, 1); c.interpreted.splice(i, 1); markDirty(); drawSteps(); repaintCase(c); reinterpret(c); } }), read);
         input.oninput = () => {
           c.steps[i] = input.value;
-          c.interpreted[i] = { text: input.value, action: 'unknown', confidence: 0, notes: ['Reading…'], summary: '' };
           markDirty();
+          read.replaceChildren(el('span', { text: input.value.trim() ? 'Reading…' : 'Write what should happen in this step.' }));
           reinterpret(c);
         };
         return row;
@@ -394,11 +463,15 @@
     pre.oninput = () => { c.preconditions = pre.value; markDirty(); };
     d.append(
       el('summary', {}, el('b', { text: c.id }), el('span', { text: c.title }), c.type ? el('span', { class: 'pill', text: c.type }) : null, c.priority ? el('span', { class: 'pill', text: c.priority }) : null, c.basis === 'assumed' ? el('span', { class: 'pill mid', title: 'The use case does not say what should happen here, so the expected result is a guess.', text: 'assumed' }) : null,
-        el('span', { class: 'spacer' }), weak ? el('span', { class: 'pill mid', text: weak + ' to check' }) : confPill(mean(c.interpreted.map((s) => s.confidence)))),
+        el('span', { class: 'spacer' }), (S.badges[c.id] = el('span'))),
       el('div', { class: 'body2' }, field('Title', title), c.preconditions !== undefined || true ? field('Before you start', pre) : null, el('div', {}, el('b', { text: 'Steps' }), stepsBox),
-        el('div', { class: 'row' }, el('button', { class: 'btn', text: '+ Add a step', onclick: () => { c.steps.push(''); c.interpreted.push({ text: '', action: 'unknown', confidence: 0, notes: [], summary: '' }); markDirty(); drawSteps(); } }),
+        el('div', { class: 'row' }, el('button', { class: 'btn', text: '+ Add a step', onclick: () => {
+          c.steps.push(''); c.interpreted.push({ text: '', action: 'unknown', confidence: 0, notes: [], summary: '' }); markDirty(); drawSteps(); repaintCase(c);
+          const inputs = stepsBox.querySelectorAll('input'); if (inputs.length) inputs[inputs.length - 1].focus();
+        } }),
           el('span', { class: 'spacer' }), el('button', { class: 'btn danger', text: 'Delete this test case', onclick: () => { if (confirm('Delete ' + c.id + '?')) { S.suite.cases = S.suite.cases.filter((x) => x !== c); markDirty(); drawSuite(); } } })),
         field('Expected result', expected)));
+    paintCaseBadge(c);
     return d;
   }
 

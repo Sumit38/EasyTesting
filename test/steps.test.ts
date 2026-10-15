@@ -105,3 +105,33 @@ describe('step reader', () => {
     assert.equal(parseStep('Check the Remember me box').action, 'check');
   });
 });
+
+describe('steps written the way testers usually write them', () => {
+  const read = (s: string) => parseStep(s);
+  it('reads "Field: value", "Field "value"" and "Fill X with Y"', () => {
+    assert.deepEqual([read('Enter Username: admin')].map((p) => [p.action, p.target, p.value]), [['type', 'Username', 'admin']]);
+    assert.deepEqual([read('Enter Password = secret123')].map((p) => [p.action, p.target, p.value]), [['type', 'Password', 'secret123']]);
+    assert.deepEqual([read('Enter username "admin"')].map((p) => [p.action, p.target, p.value]), [['type', 'username', 'admin']]);
+    assert.deepEqual([read('Fill the Full Name field with John')].map((p) => [p.action, p.target, p.value]), [['type', 'Full Name', 'John']]);
+    for (const s of ['Enter Username: admin', 'Enter username "admin"', 'Fill the Full Name field with John']) assert.ok(read(s).confidence >= 0.75, s);
+  });
+  it('understands a field named without its value, and asks for the value instead of scoring 0', () => {
+    for (const s of ['Enter valid username', 'Enter valid password', 'Enter email id', 'Enter OTP']) {
+      const p = read(s);
+      assert.equal(p.action, 'type', s);
+      assert.equal(p.needsValue, true, s);
+      assert.ok(p.confidence > 0.4 && p.confidence < 0.6, `${s}: ${p.confidence}`);
+      assert.match(p.notes[0], /Add the text in quotes/);
+    }
+    assert.equal(read('Enter invalid password').value, 'Wrong-Pass-123', 'a wrong password can be made up');
+    assert.equal(read('Enter a valid email').value, 'tester@example.com');
+  });
+  it('reads search and log out, and refuses steps that cover several fields', () => {
+    assert.deepEqual([read('Search for "laptop"')].map((p) => [p.action, p.target, p.value]), [['type', 'Search', 'laptop']]);
+    assert.deepEqual([read('Logout from the application')].map((p) => [p.action, p.target]), [['click', 'Logout']]);
+    for (const s of ['Provide valid credentials', 'Fill the form with valid data', 'Enter the details']) assert.equal(read(s).action, 'unknown', s);
+  });
+  it('keeps "Submit the form" a click', () => {
+    assert.equal(read('Submit the form').action, 'click');
+  });
+});

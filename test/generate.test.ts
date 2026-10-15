@@ -176,3 +176,10 @@ describe('spreadsheets of test cases', () => {
     assert.equal(rows[1][2], '1. Open the app\n2. Click "Go"');
   });
 });
+
+describe('guessing the columns of a tester\'s file', () => {
+  it('knows the usual headings', () => {
+    const m = detectMapping(['TC ID', 'Test Scenario', 'Module', 'Priority', 'Steps to Reproduce', 'Test Data', 'Expected Result']);
+    assert.deepEqual([m.id, m.title, m.area, m.priority, m.steps, m.expected], [0, 1, 2, 3, 4, 6]);
+  });
+});

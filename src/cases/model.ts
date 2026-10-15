@@ -28,12 +28,12 @@ export const COLUMN_WIDTHS = [10, 36, 16, 11, 12, 34, 70, 44, 12];
 
 const PATTERNS: Record<Field, RegExp> = {
   id: /^(id|tc ?id|test ?case ?id|case ?id|test ?id|no\.?|#|ref(erence)?)$/i,
-  title: /^(title|test ?case( name| title| description| desc| summary| scenario)?|name|scenario|summary|case|description|objective)$/i,
+  title: /^(title|test ?case( name| title| description| desc| summary| scenario)?|test ?(scenario|name|title|description|objective|summary)( name| description)?|scenario( name| description)?|name|summary|case|description|objective)$/i,
   area: /^(area|module|feature|component|page|section|screen|functionality)$/i,
   priority: /^(priority|severity|risk|criticality)$/i,
   type: /^(type|category|kind|test ?type|case ?type)$/i,
   preconditions: /^(pre-?conditions?|prerequisites?|pre-?requisites?|setup|given|assumptions?)$/i,
-  steps: /^(steps?|test ?steps?|procedure|actions?|how to test|execution steps?|step ?description)$/i,
+  steps: /^(steps?|test ?steps?|procedure|test procedure|actions?|how to test|execution steps?|step ?description|steps? to (reproduce|follow|execute)|test ?steps? description)$/i,
   expected: /^(expected( result| outcome| behaviou?r)?s?|result|outcome|expected ?results?|acceptance|then)$/i,
   basis: /^(basis|expectation basis|basis of expectation|assumed|assumption|rationale)$/i,
 };

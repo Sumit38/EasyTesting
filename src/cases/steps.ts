@@ -23,6 +23,8 @@ export interface ParsedStep {
   kind?: string;
   /** 0 to 1: how sure the reading is. Under 0.6 a person should look at it. */
   confidence: number;
+  /** A field to fill was named but no text to put in it ("Enter valid password"): it cannot run until the text is added. */
+  needsValue?: boolean;
   notes: string[];
 }
 
@@ -40,6 +42,8 @@ const HINT_ALTERNATION = Object.keys(HINTS).sort((a, b) => b.length - a.length).
 const DATA: [RegExp, string, string][] = [
   [/^(?:a\s+|an\s+|the\s+)?(?:valid|correct|registered|existing)\s+e-?mail(?:\s+address)?$/i, 'tester@example.com', 'a valid email'],
   [/^(?:an?\s+|the\s+)?(?:invalid|incorrect|malformed|wrong)\s+e-?mail(?:\s+address)?$/i, 'not-an-email', 'an invalid email'],
+  [/^(?:an?\s+|the\s+)?(?:invalid|incorrect|wrong|random)\s+password$/i, 'Wrong-Pass-123', 'a wrong password'],
+  [/^(?:an?\s+|the\s+)?(?:invalid|incorrect|wrong|unregistered|random)\s+(?:user ?name|user ?id|login(?: id)?)$/i, 'no-such-user-123', 'a username that does not exist'],
   [/^(?:an?\s+|the\s+)?(?:empty|blank)(?:\s+(?:value|string|text))?$|^nothing$/i, '', 'nothing'],
   [/^(?:an?\s+)?(?:very\s+)?long\s+(?:text|string|value|input|name)$/i, 'a'.repeat(300), 'a very long text (300 characters)'],
   [/^(?:some\s+)?special\s+characters?$/i, `!@#$%^&*()<>"'`, 'special characters'],
@@ -49,6 +53,9 @@ const DATA: [RegExp, string, string][] = [
   [/^(?:a\s+)?negative\s+number$/i, '-1', 'a negative number'],
   [/^(?:a\s+)?(?:valid\s+)?(?:name|username|user name)$/i, 'Test User', 'a name'],
 ];
+
+/** Field names testers write without a value: "Enter valid username", "Enter email id". */
+const FIELD_NOUN = /^(?:e-?mail(?: id| address)?|user ?name|user ?id|login(?: id| name)?|password|confirm(?:ed)? password|pass ?code|pin|otp|(?:first |last |full |middle |company |display )?name|(?:phone|mobile|contact)(?: number| no\.?)?|address|city|state|country|zip(?: code)?|postal code|pin ?code|age|date of birth|dob|date|amount|quantity|qty|price|card number|cvv|expiry(?: date)?|comment|comments|message|description|search (?:term|text|keyword)|keyword|title|subject|website|url)$/i;
 
 const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
 
@@ -156,6 +163,8 @@ export function parseStep(input: string): ParsedStep {
     return step(raw, { action: 'clear', target: t.target, hint: t.hint ?? 'field', confidence: 0.9 });
   }
   const typeVerb = '(?:enter|type|input|fill(?:\\s+in)?|key\\s+in|write|put|provide|set|submit)';
+  /** Only words that mean typing, for the looser patterns below: "Submit the form" and "Set ..." stay clicks. */
+  const fillVerb = '(?:enter|type|input|fill(?:\\s+in)?|key\\s+in|provide)';
   if ((m = s.match(new RegExp(`^${typeVerb}\\s+(${QUOTE})\\s+(?:in|into|in\\s+to|on|inside|as)\\s+(?:the\\s+)?(.+)$`, 'i')))) {
     const t = cleanTarget(m[6]);
     return step(raw, { action: 'type', target: t.target, hint: t.hint ?? 'field', value: valueOf(raw, m[1]).value, confidence: t.target ? 0.97 : 0.4 });
@@ -164,6 +173,17 @@ export function parseStep(input: string): ParsedStep {
     const t = cleanTarget(m[1]);
     return step(raw, { action: 'type', target: t.target, hint: t.hint ?? 'field', value: valueOf(raw, m[2]).value, confidence: t.target ? 0.95 : 0.4 });
   }
+  // "Enter Username: admin", "Password = secret123"
+  if ((m = s.match(new RegExp(`^${fillVerb}\\s+(?:the\\s+)?([^:=]{1,40}?)\\s*[:=]\\s*(.+)$`, 'i'))) && !/^https?$/i.test(m[1].trim())) {
+    const t = cleanTarget(m[1]);
+    const v = valueOf(raw, m[2]);
+    return step(raw, { action: 'type', target: t.target, hint: t.hint ?? 'field', value: v.value, confidence: t.target ? Math.max(v.confidence, 0.88) : 0.4, notes: v.notes.filter((n) => !n.includes('not in quotes')) });
+  }
+  // "Enter username "admin"": the field first, then the text in quotes
+  if ((m = s.match(new RegExp(`^${fillVerb}\\s+(?:the\\s+)?(.+?)\\s+(${QUOTE})$`, 'i'))) && !/\s(?:in|into|on|inside)\s/i.test(m[1])) {
+    const t = cleanTarget(m[1]);
+    return step(raw, { action: 'type', target: t.target, hint: t.hint ?? 'field', value: valueOf(raw, m[2]).value, confidence: t.target ? 0.92 : 0.4 });
+  }
   if ((m = s.match(new RegExp(`^${typeVerb}\\s+(.+?)\\s+(?:in|into|in\\s+to|on|inside)\\s+(?:the\\s+)?(.+)$`, 'i')))) {
     const v = valueOf(raw, m[1]);
     const t = cleanTarget(m[2]);
@@ -171,7 +191,42 @@ export function parseStep(input: string): ParsedStep {
   }
   if ((m = s.match(new RegExp(`^${typeVerb}\\s+(?:the\\s+)?(.+?)\\s+(?:${HINT_ALTERNATION})?\\s*(?:and|then)?$`, 'i'))) && /\b(?:field|box|input|textbox)\b/i.test(m[1])) {
     const t = cleanTarget(m[1]);
-    return step(raw, { action: 'type', target: t.target, hint: 'field', value: '', confidence: 0.45, notes: ['No text to enter was given.'] });
+    return step(raw, { action: 'type', target: t.target, hint: 'field', value: '', needsValue: true, confidence: 0.45, notes: ['No text to enter was given.'] });
+  }
+  // "Fill the Full Name field with John", "Enter the city as Pune"
+  if ((m = s.match(new RegExp(`^${fillVerb}\\s+(?:the\\s+)?(.+?)\\s+(?:with|as)\\s+(.+)$`, 'i')))) {
+    const t = cleanTarget(m[1]);
+    if (/^(?:form|details|data|information|info|all(?: the)? fields|(?:all )?(?:the )?(?:mandatory|required) fields|fields)$/i.test(t.target)) {
+      return step(raw, { action: 'unknown', confidence: 0.3, notes: ['This fills several fields at once. Write one step per field, for example: Enter "Jane" in the First name field.'] });
+    }
+    const v = valueOf(raw, m[2]);
+    return step(raw, { action: 'type', target: t.target, hint: t.hint ?? 'field', value: v.value, confidence: t.target ? Math.max(v.confidence, 0.78) : 0.4, notes: v.notes });
+  }
+  // "Enter valid username", "Enter email id", "Enter an invalid email": a field is named, the text is not
+  if ((m = s.match(new RegExp(`^${fillVerb}\\s+(?:(?:a|an|the|your|some|any)\\s+)?(?:(valid|invalid|correct|incorrect|wrong|registered|unregistered|existing|new|different|random)\\s+)?(.+?)(?:\\s+(?:field|box|input|textbox|text box))?$`, 'i')))) {
+    const quality = (m[1] ?? '').toLowerCase();
+    const noun = m[2].replace(/\s+(?:id|address)$/i, (x) => (/email|e-mail/i.test(m![2]) ? '' : x)).trim();
+    const known = FIELD_NOUN.test(noun);
+    if (/^(?:credentials?|login details|details|data|information|info|values?|text|input|form|everything|all(?: fields)?|(?:all )?(?:the )?(?:mandatory|required) fields|fields)$/i.test(noun)) {
+      return step(raw, { action: 'unknown', confidence: 0.3, notes: ['This names several fields at once. Write one step per field, for example: Enter "jane@example.com" in the Email field.'] });
+    }
+    if (known || noun.split(' ').length <= 3) {
+      const label = noun.replace(/\b\w/g, (c) => c.toUpperCase());
+      const credential = /user ?name|user ?id|login(?: id)?|password|passcode|pin|otp/i.test(noun);
+      const sample = credential && !/invalid|incorrect|wrong|unregistered|random/.test(quality) ? undefined : DATA.find(([re]) => re.test(`${quality} ${noun}`.trim()) || (!quality && re.test(noun)));
+      if (sample) {
+        return step(raw, { action: 'type', target: label, hint: 'field', value: sample[1], confidence: known ? 0.72 : 0.6, notes: [`No exact text was given, so "${sample[2]}" is typed as ${JSON.stringify(sample[1].length > 40 ? sample[1].slice(0, 20) + '…' : sample[1])}.`] });
+      }
+      return step(raw, {
+        action: 'type', target: label, hint: 'field', value: '', needsValue: true, confidence: known ? 0.55 : 0.45,
+        notes: [`Which ${noun.toLowerCase()}? Add the text in quotes, for example: Enter "…" in the ${label} field.`],
+      });
+    }
+  }
+  // "Search for "laptop"": type it into the search box
+  if ((m = s.match(new RegExp(`^search\\s+(?:for\\s+)?(${QUOTE}|.+)$`, 'i')))) {
+    const v = valueOf(raw, m[1]);
+    return step(raw, { action: 'type', target: 'Search', hint: 'field', value: v.value, confidence: Math.min(v.confidence, 0.8), notes: [...v.notes, 'Types it into the search box. If the search does not start by itself, add a step: Press Enter.'] });
   }
 
   // ---- select from a dropdown -----------------------------------------------------
@@ -206,6 +261,9 @@ export function parseStep(input: string): ParsedStep {
     const t = cleanTarget(m[1]);
     const bare = /^(?:submit)$/i.test(s.split(' ')[0]) && !t.hint;
     return step(raw, { action: 'click', target: t.target, hint: t.hint, confidence: !t.target ? 0.3 : t.hint ? 0.95 : bare ? 0.7 : 0.88 });
+  }
+  if ((m = s.match(/^(log ?out|log ?off|sign ?out)(?:\s+(?:from|of)\s+(?:the\s+|your\s+)?(?:application|app|site|website|web site|account|system|portal|page))?$/i))) {
+    return step(raw, { action: 'click', target: m[1], confidence: 0.8, notes: [`Clicks the "${m[1]}" button or link. If it is inside a menu, add a step to open the menu first.`] });
   }
   if (/^(?:log ?in|sign ?in|submit|save|continue|next|search|register|sign ?up|log ?out|sign ?out)$/i.test(s)) {
     return step(raw, { action: 'click', target: s, hint: 'button', confidence: 0.7, notes: [`Read as "Click the ${s} button".`] });

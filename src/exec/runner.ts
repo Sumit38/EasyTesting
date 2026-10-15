@@ -36,6 +36,8 @@ export interface StepResult {
   status: 'passed' | 'failed' | 'skipped';
   /** The failure was the page not loading (site or network), not something the app did wrong. */
   environment?: boolean;
+  /** The step itself could not be run as written (not understood, or no text to type): a problem with the test case, not the app. */
+  unreadable?: boolean;
   /** How sure the reader was that it understood the step. */
   parseConfidence: number;
   /** How sure the tool was that it found the right element (1 when the step names none). */
@@ -178,8 +180,18 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
           failed = true;
           r.status = 'failed';
           r.error = 'This step could not be understood, so the case was stopped here.';
+          r.unreadable = true;
           r.ms = Date.now() - t0;
           log(`  ✖ ${i + 1}. ${shown(text)}  (not understood)`);
+          continue;
+        }
+        if (parsed.needsValue) {
+          failed = true;
+          r.status = 'failed';
+          r.error = `This step names the ${parsed.target ?? ''} field but not what to type in it, so the case was stopped here. Add the text in quotes, for example: Enter "…" in the ${parsed.target ?? ''} field.`;
+          r.unreadable = true;
+          r.ms = Date.now() - t0;
+          log(`  ✖ ${i + 1}. ${shown(text)}  (no text to type)`);
           continue;
         }
         try {
@@ -233,6 +245,7 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
 function adviceFor(s: StepResult, assumed = false): string {
   if (s.environment) return `Step ${s.index + 1} could not load the page (the site or the network was slow or unreachable). That says nothing about the app, so this case is blocked, not failed. Run it again.`;
   if (s.action === 'unknown') return `Step ${s.index + 1} could not be read. Rewrite it in the review screen.`;
+  if (s.unreadable) return `Step ${s.index + 1} names a field but not what to type in it. Add the text in quotes in the review screen, then run again.`;
   if (s.parseConfidence < 0.6) return `Step ${s.index + 1} may have been misread (${Math.round(s.parseConfidence * 100)}% sure). Check how it was understood before calling this a bug.`;
   if (/could not find/i.test(s.error ?? '')) return `Step ${s.index + 1} could not find "${s.target}". Either the page changed or the step names it differently. Compare with the closest matches shown.`;
   if (s.action === 'verify' && assumed) return `Step ${s.index + 1} checked something the use case never stated: this case's expected result was a guess. Decide what the app should do. If it is right, edit the last step or delete the case; if not, it is a defect.`;
@@ -251,8 +264,9 @@ function writeResults(dir: string, results: CaseResult[]) {
     join(dir, 'results.json'),
     JSON.stringify({
       framework: 'cases',
+      // A case stopped by a step it could not run as written was not really tested: it is reported as not run, never as a bug in the app.
       tests: results.map((r) => ({
-        title: `${r.id} ${r.title}`, file: 'test-cases', assumed: r.assumed, status: r.status === 'passed' ? 'passed' : r.status === 'skipped' ? 'skipped' : r.status === 'blocked' ? 'interrupted' : 'failed', flaky: false, durationMs: r.durationMs, retries: 0,
+        title: `${r.id} ${r.title}`, file: 'test-cases', assumed: r.assumed, status: r.status === 'passed' ? 'passed' : r.status === 'skipped' || r.steps.some((s) => s.unreadable) ? 'skipped' : r.status === 'blocked' ? 'interrupted' : 'failed', flaky: false, durationMs: r.durationMs, retries: 0,
         error: r.steps.find((s) => s.status === 'failed')?.error, errorLine: r.steps.find((s) => s.status === 'failed')?.error,
       })),
     }, null, 2),
