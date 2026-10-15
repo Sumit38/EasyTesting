@@ -265,13 +265,14 @@
   .case { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 10px; box-shadow: var(--shadow); }
   .case > summary { list-style: none; cursor: pointer; padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
   .case > summary::-webkit-details-marker { display: none; } .case > summary::before { content: '▸'; color: var(--muted); } .case[open] > summary::before { content: '▾'; }
-  .case .body2 { padding: 4px 16px 16px; display: grid; gap: 10px; }
+  .case .body2 { padding: 4px 16px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
   .pill { border-radius: 99px; padding: 1px 10px; font-size: 12px; font-weight: 700; background: var(--code); color: var(--muted); }
   .pill.good { background: var(--ok-soft); color: var(--ok); } .pill.mid { background: var(--warn-soft); color: var(--warn); } .pill.low { background: var(--bad-soft); color: var(--bad); }
-  .stepline { display: grid; grid-template-columns: 28px 1fr auto; gap: 6px 10px; align-items: start; padding: 6px 0; border-top: 1px solid var(--line); }
+  .stepline { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 6px 10px; align-items: start; padding: 6px 0; border-top: 1px solid var(--line); }
   .stepline:first-child { border-top: 0; } .stepline .n { color: var(--muted); font-weight: 700; padding-top: 8px; text-align: right; }
   .stepline input[type=text] { width: 100%; }
-  .stepline .read { grid-column: 2 / 3; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+  .stepline .read { grid-column: 2 / 3; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; min-width: 0; overflow-wrap: anywhere; }
+  .stepline .read > span { min-width: 0; }
   .stepline.weak .read { color: var(--warn); }
   .stepline.bad input[type=text] { border-color: var(--bad); }
   .tag { background: var(--code); border-radius: 6px; padding: 0 7px; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text); }

@@ -106,6 +106,15 @@ function valueOf(raw: string, phrase: string): { value: string; confidence: numb
 }
 
 export function parseStep(input: string): ParsedStep {
+  const p = readStep(input);
+  // "<product name>": a gap the generator left for a person to fill in. Understood, but it cannot run as it is.
+  if (p.action !== 'unknown' && [p.target, p.value].some((x) => /^<[a-z][a-z0-9 '-]{0,58}>$/i.test(x?.trim() ?? ''))) {
+    return { ...p, confidence: Math.min(p.confidence, 0.4), notes: ['Replace the words in <angle brackets> with the real name or text from the page.', ...p.notes] };
+  }
+  return p;
+}
+
+function readStep(input: string): ParsedStep {
   const raw = input;
   let s = clean(input.replace(/[‘’]/g, "'").replace(/[“”]/g, '"')).replace(/^(?:step\s*)?\d+\s*[.):-]\s*/i, '').replace(/\.$/, '');
   if (!s) return step(raw, { notes: ['The step is empty.'] });

@@ -1,4 +1,5 @@
 import type { TestCase } from './model.js';
+import { parseStep } from './steps.js';
 import { parseUseCase, type UseCase } from './usecase.js';
 
 export interface GenerateOptions {
@@ -43,21 +44,51 @@ interface Planned {
   role: 'open' | 'enter' | 'submit' | 'verify' | 'other';
 }
 
-/** Turns one sentence of a use case ("The user enters email and password") into one or more steps. */
-function plan(sentence: string, opts: GenerateOptions, first: boolean, notes: string[]): Planned[] {
+/** Verbs in the third person, as use cases write them: "The customer adds", "The system displays". */
+const VERB = '(?:enters?|types?|inputs?|provides?|fills?|clicks?|presses?|taps?|selects?|chooses?|picks?|opens?|navigates?|goes|visits?|checks?|ticks?|submits?|views?|sees?|shows?|displays?|presents?|renders?|redirects?|logs?|signs?|uploads?|searches?|rejects?|prevents?|blocks?|denies?|sends?|confirms?|notifies?|validates?|keeps?|stays?|remains?|accepts?|agrees?|launch(?:es)?|access(?:es)?|takes?|adds?|removes?|proceeds?|makes?|pays?|places?|packs?|ships?|delivers?|receives?|updates?|cancels?|registers?|creates?|saves?|deletes?|edits?|processes?|records?|stores?|generates?|calculates?|charges?|reserves?|deducts?|assigns?|is|are)';
+
+/** "The customer selects a product and adds it to the cart" is two steps; the second keeps the subject of the first. */
+export function splitCompound(sentence: string): string[] {
+  const parts = sentence.split(new RegExp(`(?:,\\s+(?:and\\s+|then\\s+|and then\\s+)?|\\s+(?:and then|then|and)\\s+)(?=(?:(?:it|he|she|they)\\s+)?${VERB}\\b)`, 'i'));
+  if (parts.length === 1) return parts;
+  const subject = parts[0].match(new RegExp(`^(.*?)(?=\\b${VERB}\\b)`, 'i'))?.[1] ?? '';
+  return [parts[0], ...parts.slice(1).map((p) => subject + p.replace(/^(?:it|he|she|they)\s+/i, ''))];
+}
+
+/** Turns one sentence of a use case ("The user enters email and password") into steps. Returns none for what cannot be done in the browser. */
+function plan(sentence: string, opts: GenerateOptions, first: boolean, notes: string[], actor?: string): Planned[] {
   let s = sentence.replace(/\s+/g, ' ').trim().replace(/[.;]$/, '');
   // Drop the subject ("The shopper", "The system") that comes before the verb. Sentences about the system become checks.
-  const VERB = '(?:enters?|types?|inputs?|provides?|fills?|clicks?|presses?|taps?|selects?|chooses?|picks?|opens?|navigates?|goes|visits?|checks?|ticks?|submits?|views?|sees?|shows?|displays?|presents?|renders?|redirects?|logs?|signs?|uploads?|searches?|rejects?|prevents?|blocks?|denies?|sends?|confirms?|notifies?|validates?|keeps?|stays?|remains?|accepts?|agrees?|launch(?:es)?|access(?:es)?|takes?|is|are)';
   const subject = s.match(new RegExp(`^((?:(?:the|a|an|then|and|but|also)\\s+)*(?:[a-z][a-z-]*\\s+){0,3}?)(?:(?:then|also|can|should|will|must|may)\\s+)*(?=${VERB}\\b)`, 'i'));
   let system = false;
   if (subject && subject[0].trim()) {
     system = /\b(?:system|application|app|site|website|page|server|screen|portal|platform|service|ui)\b/i.test(subject[1]);
+    const who = subject[1].replace(/^(?:(?:the|a|an|then|and|but|also)\s+)+/i, '').trim();
+    const isUser = !who || /\b(?:user|customer|shopper|buyer|visitor|member|client|guest|tester|he|she|they|i|we|you)\b/i.test(who) || !!actor?.split(/[\s,/]+/).some((w) => w.length > 2 && who.toLowerCase().includes(w.toLowerCase()));
+    // "Warehouse staff ships the order": someone else, somewhere else. Not a step of this test.
+    if (!system && !isUser) {
+      const said = `is done by ${who}, not by the person using the website`;
+      if (!notes.some((n) => n.includes(said))) notes.push(`"${sentence.trim()}" ${said}, so it is not a step here. Test it separately.`);
+      return [];
+    }
     s = s.slice(subject[0].length);
   }
-  const verbFix: Record<string, string> = { enters: 'enter', types: 'type', inputs: 'input', provides: 'provide', clicks: 'click', presses: 'press', taps: 'tap', selects: 'select', chooses: 'choose', picks: 'pick', opens: 'open', navigates: 'navigate', goes: 'go', visits: 'visit', checks: 'check', ticks: 'tick', submits: 'submit', fills: 'fill', views: 'view', sees: 'see', shows: 'show', displays: 'display', redirects: 'redirect', logs: 'log', signs: 'sign', uploads: 'upload', searches: 'search' };
+  const verbFix: Record<string, string> = { enters: 'enter', types: 'type', inputs: 'input', provides: 'provide', clicks: 'click', presses: 'press', taps: 'tap', selects: 'select', chooses: 'choose', picks: 'pick', opens: 'open', navigates: 'navigate', goes: 'go', visits: 'visit', checks: 'check', ticks: 'tick', submits: 'submit', fills: 'fill', views: 'view', sees: 'see', shows: 'show', displays: 'display', redirects: 'redirect', logs: 'log', signs: 'sign', uploads: 'upload', searches: 'search', adds: 'add', removes: 'remove', proceeds: 'proceed', makes: 'make', pays: 'pay', places: 'place', receives: 'receive', confirms: 'confirm', sends: 'send', updates: 'update', cancels: 'cancel', registers: 'register', creates: 'create', saves: 'save', deletes: 'delete', edits: 'edit' };
   s = s.replace(/^(\w+)/, (w) => verbFix[w.toLowerCase()] ?? w);
   let m: RegExpMatchArray | null;
 
+  if (system) {
+    // Things the system does that a browser cannot see: e-mails and messages, and work behind the scenes.
+    if (/^(?:send|emails?|notif(?:y|ies)|texts?|sms)\b/i.test(s) || /\b(?:e-?mail|sms|text message|push notification)\b/i.test(s) && !/\b(?:field|box)\b/i.test(s)) {
+      notes.push(`"${sentence.trim()}" happens outside the website (an e-mail or message), so it cannot be checked in the browser. Check it by hand.`);
+      return [];
+    }
+    if (/^(?:creates?|saves?|stores?|records?|updates?|reserves?|deducts?|charges?|process(?:es)?|calculates?|generates?|assigns?|logs?)\b/i.test(s)) {
+      notes.push(`"${sentence.trim()}" happens inside the system. It is not a step; the checks that follow show whether it worked.`);
+      return [];
+    }
+    if (/^confirm\s+(?:the\s+|that\s+)?(?:order|booking|purchase|payment|registration|request|submission|reservation)\b/i.test(s)) return [{ text: 'Verify a success message is displayed', role: 'verify' }];
+  }
   if (system || /^(?:show|display|present|render|see|view|redirect|navigate|send|confirm|notify|validate|reject|prevent|keep|stay|remain)\b/i.test(s) && system) {
     if ((m = s.match(/^(?:redirect|navigate|take|send)s?(?:\s+(?:the\s+)?(?:user|them|customer))?\s+to\s+(.+)$/i))) return [{ text: `Verify the user is redirected to the ${stripArticle(m[1]).replace(/\s+page$/i, '')} page`, role: 'verify' }];
     if ((m = s.match(/^(?:show|display|present|render|see|view)s?\s+(.+)$/i))) {
@@ -66,13 +97,46 @@ function plan(sentence: string, opts: GenerateOptions, first: boolean, notes: st
       if (/\b(?:error|invalid|validation|warning|failure|incorrect|wrong|not valid|rejected)\b/i.test(what)) return [{ text: quoted ? `Verify the error message "${quoted[1]}" is displayed` : 'Verify an error message is displayed', role: 'verify' }];
       if (quoted) return [{ text: `Verify "${quoted[1]}" is displayed`, role: 'verify' }];
       if (/\b(?:success|confirmation|saved|thank)\b/i.test(what) && /message|notice|banner/i.test(what)) return [{ text: 'Verify a success message is displayed', role: 'verify' }];
-      return [{ text: `Verify the ${stripArticle(what).replace(/\s+(?:page|screen)$/i, ' page')} is displayed`.replace(/\bpage page\b/, 'page'), role: 'verify' }];
+      const thing = stripArticle(what).replace(/\s+(?:page|screen)$/i, ' page');
+      const plural = /[^s]s$/i.test(thing) && !/\b(?:details|status|address|news|progress)$/i.test(thing);
+      return [{ text: `Verify the ${thing} ${plural ? 'are' : 'is'} displayed`.replace(/\bpage page\b/, 'page'), role: 'verify' }];
     }
     if ((m = s.match(/^(?:reject|prevent|block|deny|refuse)s?\b(.*)$/i))) return [{ text: 'Verify an error message is displayed', role: 'verify' }];
     return [{ text: `Verify ${s.charAt(0).toLowerCase()}${s.slice(1)}`, role: 'verify' }];
   }
 
   if ((m = s.match(/^(?:is|are)\s+(?:on|at|in)\s+(?:the\s+)?(.+)$/i))) return plan(`open ${m[1]}`, opts, first, notes);
+  // Everyday shop and account actions, as use cases phrase them.
+  if ((m = s.match(/^(?:log|sign)\s?in(?:\s+to\s+(?:the|his|her|their)?\s*(?:account|application|app|site|website|system))?\s+(?:with|using)\s+(?:his|her|their|the|a|valid|registered|correct)?\s*(.+)$/i))) {
+    return [...plan(`enter ${m[1].replace(/\bcredentials?\b/i, 'email and password')}`, opts, false, notes), { text: 'Click the "Log in" button', role: 'submit' }];
+  }
+  if (/^(?:log|sign)\s?(?:out|off)\b/i.test(s)) return [{ text: 'Click "Log out"', role: 'other' }];
+  if ((m = s.match(/^search(?:es)?\s+(?:for\s+)?(.+)$/i))) {
+    const quoted = m[1].match(/["“']([^"”']+)["”']/);
+    const value = quoted?.[1] ?? opts.testData?.search ?? opts.testData?.product;
+    if (!value) notes.push(`"${sentence.trim()}": put the real text to search for in place of <${stripArticle(m[1])}>.`);
+    return [{ text: `Search for "${value ?? `<${stripArticle(m[1])}>`}"`, role: 'other' }, { text: 'Press Enter', role: 'other' }];
+  }
+  if ((m = s.match(/^add\s+(?:it|them|this|that|(?:the|a|an|one)\s+(?:selected\s+)?[\w\s-]{1,30}?)?\s*to\s+(?:the\s+|his\s+|her\s+|their\s+)?(?:shopping\s+)?(cart|basket|bag|wish ?list)\b/i))) {
+    const where = /wish/i.test(m[1]) ? 'wishlist' : m[1].toLowerCase();
+    return [{ text: `Click the "Add to ${where}" button`, role: 'other' }];
+  }
+  if ((m = s.match(/^proceed\s+to\s+(?:the\s+)?(checkout|payment|cart|shipping|delivery)\b/i))) return [{ text: /checkout/i.test(m[1]) ? 'Click the "Checkout" button' : `Click the "Proceed to ${m[1].toLowerCase()}" button`, role: 'other' }];
+  if (/^place\s+(?:the\s+|an?\s+|his\s+|her\s+|their\s+)?order\b/i.test(s)) return [{ text: 'Click the "Place order" button', role: 'submit' }];
+  if (/^(?:make\s+(?:the\s+|a\s+)?payment|pay)\b/i.test(s)) return [{ text: 'Click the "Pay" button', role: 'submit' }];
+  if ((m = s.match(/^receive\s+(.+)$/i))) {
+    if (/\b(?:e-?mail|sms|text|message on (?:his|her|their) phone)\b/i.test(m[1])) {
+      notes.push(`"${sentence.trim()}" happens outside the website (an e-mail or message), so it cannot be checked in the browser. Check it by hand.`);
+      return [];
+    }
+    return [{ text: `Verify the ${stripArticle(m[1])} is displayed`, role: 'verify' }];
+  }
+  // "Selects a product", "chooses a payment method": the use case does not name it, so the step needs the real name.
+  if ((m = s.match(/^(?:select|choose|pick)\s+(?:a|an|any|one|the|his|her|their)\s+([\w\s-]{2,40})$/i)) && !/\b(?:from|in)\b/i.test(m[1])) {
+    const what = m[1].trim();
+    notes.push(`"${sentence.trim()}": the use case does not say which ${what}. Replace <${what}> with the name shown on the page.`);
+    return [{ text: `Click "<${what}>"`, role: 'other' }];
+  }
   if ((m = s.match(/^(?:open|navigate to|go to|visit|launch|access)\s+(.+)$/i))) {
     const what = m[1];
     if (first && opts.startPage) return [{ text: `Open "${opts.startPage}"`, role: 'open' }];
@@ -104,15 +168,18 @@ function plan(sentence: string, opts: GenerateOptions, first: boolean, notes: st
     return [{ text: hint ? `Click the "${label}" ${hint}` : `Click "${label}"`, role: isSubmit ? 'submit' : 'other' }];
   }
   if ((m = s.match(/^(?:log|sign) ?in$/i))) return [{ text: 'Click "Log in"', role: 'submit' }];
-  notes.push(`Could not turn "${sentence.trim()}" into a step. It is kept as written: rewrite it in the sheet.`);
-  return [{ text: s.charAt(0).toUpperCase() + s.slice(1), role: 'other' }];
+  // Anything else would become a step nobody can run. Leave it out and say so, rather than fill the case with it.
+  const asStep = s.charAt(0).toUpperCase() + s.slice(1);
+  if (parseStep(asStep).action !== 'unknown') return [{ text: asStep, role: 'other' }];
+  notes.push(`Could not turn "${sentence.trim()}" into a step, so it was left out. Add it by hand if it matters.`);
+  return [];
 }
 
 export function generateCases(text: string, opts: GenerateOptions = {}): Generated {
   const uc = parseUseCase(text);
   const notes: string[] = [];
   const planned: Planned[] = [];
-  uc.mainFlow.forEach((sentence, i) => planned.push(...plan(sentence, opts, planned.length === 0 && i === 0, notes)));
+  uc.mainFlow.flatMap(splitCompound).forEach((sentence, i) => planned.push(...plan(sentence, opts, planned.length === 0 && i === 0, notes, uc.actor)));
   if (planned.length && planned[0].role !== 'open') planned.unshift({ text: opts.startPage ? `Open "${opts.startPage}"` : 'Open the application', role: 'open' });
 
   const cases: TestCase[] = [];
@@ -222,8 +289,8 @@ export function generateCases(text: string, opts: GenerateOptions = {}): Generat
   for (const sc of uc.scenarios) {
     const steps: string[] = [];
     let first = true;
-    for (const w of [...sc.given, ...sc.when]) {
-      for (const p of plan(w, opts, first, notes)) steps.push(p.text);
+    for (const w of [...sc.given, ...sc.when].flatMap(splitCompound)) {
+      for (const p of plan(w, opts, first, notes, uc.actor)) steps.push(p.text);
       first = false;
     }
     if (steps.length && !/^open/i.test(steps[0])) steps.unshift(opts.startPage ? `Open "${opts.startPage}"` : 'Open the application');

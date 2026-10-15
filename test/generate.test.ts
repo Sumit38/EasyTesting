@@ -183,3 +183,42 @@ describe('guessing the columns of a tester\'s file', () => {
     assert.deepEqual([m.id, m.title, m.area, m.priority, m.steps, m.expected], [0, 1, 2, 3, 4, 6]);
   });
 });
+
+describe('use cases written as real documents', () => {
+  const steps = (text: string) => generateCases(text).cases[0]?.steps ?? [];
+  const unreadable = (text: string) => generateCases(text).cases.flatMap((c) => c.steps).filter((s) => parseStep(s).action === 'unknown');
+
+  it('reads a Markdown document with a details table, numbered headings and other actors, without turning headings into steps', async () => {
+    const { readFileSync } = await import('node:fs');
+    const doc = readFileSync(new URL('./fixtures/usecase-shop.md', import.meta.url), 'utf8');
+    const out = generateCases(doc);
+    assert.equal(out.useCase.title, 'Manage Online Shopping System - End-to-End');
+    assert.equal(out.useCase.actor, 'Customer');
+    const main = out.cases[0].steps;
+    for (const junk of [/Professional Use Case/, /\|/, /Use Case ID/, /Version/, /^Description$/, /Warehouse/, /e-?mail confirmation|confirmation email/i]) {
+      assert.ok(!main.some((s) => junk.test(s)), `${junk} became a step:\n${main.join('\n')}`);
+    }
+    assert.deepEqual(unreadable(doc), [], 'no step is left that the reader cannot understand');
+    for (const want of ['Click the "Log in" button', 'Click the "Add to cart" button', 'Click the "Checkout" button', 'Click the "Pay" button', 'Verify the order number is displayed']) assert.ok(main.includes(want), `missing: ${want}\n${main.join('\n')}`);
+    assert.ok(main.includes('Click "<product>"'), 'an unnamed product is left for the tester to fill in');
+    assert.ok(parseStep('Click "<product>"').confidence < 0.6, 'and is flagged as needing them');
+    assert.ok(out.notes.some((n) => /outside the website/.test(n)) && out.notes.some((n) => /done by Warehouse staff/.test(n)));
+    assert.deepEqual(out.cases.filter((c) => c.type === 'Alternate').map((c) => c.title.split(': ').pop()), ['No product matches the search', 'The payment is declined']);
+  });
+
+  it('reads numbered Word-style sections ("3.1 Basic Flow") and skips document details', () => {
+    const doc = 'Use Case Specification\nUse Case ID: UC-07\nUse Case Name: Register a new account\nVersion: 2.1\nPrimary Actor: Visitor\n2. Preconditions\nThe visitor is not logged in.\n3.1 Basic Flow\n1. The visitor opens the registration page.\n2. The visitor enters name, email and password.\n3. The visitor clicks the Register button.\n4. The system creates the account and displays "Welcome to the shop".';
+    assert.equal(generateCases(doc).useCase.title, 'Register a new account');
+    assert.deepEqual(steps(doc), ['Open the application', 'Enter "Test value" in the Name field', 'Enter "tester@example.com" in the Email field', 'Enter "Password1!" in the Password field', 'Click the "Register" button', 'Verify "Welcome to the shop" is displayed']);
+  });
+
+  it('reads a flow table from a spreadsheet ("1 - Customer - Opens the site")', () => {
+    const doc = 'Professional Use Case Document\nShop - End-to-End - UseCase\nStep - Actor - Action\n1 - Customer - Opens the online shopping website\n2 - Customer - Logs in with email and password\n3 - Customer - Adds a product to the cart\n4 - System - Displays the cart total';
+    assert.deepEqual(steps(doc), ['Open the application', 'Enter "tester@example.com" in the Email field', 'Enter "Password1!" in the Password field', 'Click the "Log in" button', 'Click the "Add to cart" button', 'Verify the cart total is displayed']);
+  });
+
+  it('reads plain prose, one action per comma or "and"', () => {
+    const doc = 'Online Shopping - Checkout\nThis document explains the checkout of the web shop.\nThe customer opens the shop and searches for "red shoes". The system shows matching products. The customer adds the first product to the cart, proceeds to checkout and places the order. The system displays "Thank you for your order".';
+    assert.deepEqual(steps(doc), ['Open the application', 'Search for "red shoes"', 'Press Enter', 'Verify the matching products are displayed', 'Click the "Add to cart" button', 'Click the "Checkout" button', 'Click the "Place order" button', 'Verify "Thank you for your order" is displayed']);
+  });
+});
