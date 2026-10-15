@@ -475,6 +475,117 @@
     return d;
   }
 
+  /* ---------- fix the gaps: every unclear step once, fixed for all the cases that use it ---------- */
+  const PLACEHOLDER = /<([a-z][a-z0-9 '-]{0,58})>/i;
+  /** The unclear steps of the set, each text once, most used first. */
+  function gapGroups() {
+    const groups = new Map();
+    for (const c of S.suite.cases) {
+      c.steps.forEach((st, i) => {
+        const it = c.interpreted[i];
+        const t = (st || '').trim();
+        if (!t || !it || it.confidence >= 0.6) return;
+        const g = groups.get(t) || { text: t, it, cases: new Set(), count: 0 };
+        g.cases.add(c.id);
+        g.count++;
+        groups.set(t, g);
+      });
+    }
+    return [...groups.values()].sort((a, b) => b.cases.size - a.cases.size || b.count - a.count);
+  }
+
+  /** Changes one step text in every case (or removes it when `to` is null), then saves, which reads every step again. */
+  async function replaceEverywhere(from, to) {
+    for (const c of S.suite.cases) {
+      for (let i = c.steps.length - 1; i >= 0; i--) {
+        if ((c.steps[i] || '').trim() !== from) continue;
+        if (to === null) { c.steps.splice(i, 1); c.interpreted.splice(i, 1); } else c.steps[i] = to;
+      }
+    }
+    await saveSuite();
+  }
+
+  function gapRow(g) {
+    const ph = g.text.match(PLACEHOLDER);
+    const where = `in ${g.cases.size} test case${g.cases.size === 1 ? '' : 's'}`;
+    const err = el('div', { class: 'err' });
+    const act = async (fn) => { err.textContent = ''; try { await fn(); } catch (e) { err.textContent = e.message; } };
+    const del = el('button', { class: 'btn', text: 'Delete everywhere', title: 'Remove this step from every test case that has it', onclick: () => act(() => replaceEverywhere(g.text, null)) });
+    let body;
+    if (ph) {
+      // "Click "<product>"": ask only for the missing name.
+      const input = text('e.g. ' + (/search/i.test(g.text) ? 'laptop' : /payment/i.test(ph[1]) ? 'Credit card' : 'Wireless Mouse'));
+      const go = el('button', { class: 'btn primary', text: `Use it ${where}`, onclick: () => act(async () => {
+        if (!input.value.trim()) throw new Error('Type the ' + ph[1] + ' first.');
+        await replaceEverywhere(g.text, g.text.replace(PLACEHOLDER, input.value.trim().replace(/"/g, "'")));
+      }) });
+      input.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
+      const question = /^search/i.test(g.text) ? 'What should be searched for?' : `Which ${ph[1]}? Type it exactly as it appears on the page.`;
+      body = [el('label', { class: 'gapq', text: question }), el('div', { class: 'gapfix' }, input, go, del)];
+    } else if (g.it.needsValue) {
+      // "Enter valid password": ask only for the text to type.
+      const field = g.it.target || 'field';
+      const input = el('input', { type: /password|pin|otp/i.test(field) ? 'password' : 'text', placeholder: `Text for the ${field} field`, autocomplete: 'off' });
+      const go = el('button', { class: 'btn primary', text: `Use it ${where}`, onclick: () => act(async () => {
+        if (!input.value) throw new Error('Type the text first.');
+        await replaceEverywhere(g.text, `Enter "${input.value.replace(/"/g, "'")}" in the ${field} field`);
+      }) });
+      input.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
+      body = [el('label', { class: 'gapq', text: `What should be typed in the ${field} field? Use a real test account's details if the app needs one.` }), el('div', { class: 'gapfix' }, input, go, del)];
+    } else {
+      // Anything else: rewrite it once, see how it will be read, apply it to every case.
+      const input = text('', g.text);
+      const preview = el('div', { class: 'gapread' });
+      const showRead = (it) => preview.replaceChildren(el('span', { class: 'tag', text: it.action === 'unknown' ? 'not understood' : it.action }), el('span', { text: it.action === 'unknown' ? 'Not an action we can run. Rewrite it, or delete it if it is a heading or a note.' : it.summary + (it.notes[0] ? ' · ' + it.notes[0] : '') }), confPill(it.confidence));
+      showRead(g.it);
+      let t;
+      input.oninput = () => { clearTimeout(t); t = setTimeout(async () => { try { showRead((await send('/steps/interpret', { steps: [input.value] })).steps[0]); } catch { /* next keystroke */ } }, 300); };
+      const go = el('button', { class: 'btn primary', text: `Apply ${where}`, onclick: () => act(async () => {
+        if (!input.value.trim() || input.value.trim() === g.text) throw new Error('Rewrite the step first, or delete it.');
+        await replaceEverywhere(g.text, input.value.trim());
+      }) });
+      const sugg = ai.available ? el('button', { class: 'btn', text: '✨ Suggest', onclick: () => act(async () => {
+        const better = (await send('/steps/improve', { steps: [input.value] })).steps[0];
+        input.value = better.text; showRead(better);
+      }) }) : null;
+      body = [el('div', { class: 'gapfix' }, input, go, sugg, del), preview];
+    }
+    return el('div', { class: 'gap' }, el('div', { class: 'gaphead' }, el('b', { text: g.text }), el('span', { class: 'pill mid', text: where })), ...body, err);
+  }
+
+  function gapsPanel() {
+    const groups = gapGroups();
+    if (!groups.length) return null;
+    const total = groups.reduce((n, g) => n + g.count, 0);
+    const junk = groups.filter((g) => g.it.action === 'unknown' && !PLACEHOLDER.test(g.text));
+    const junkCount = junk.reduce((n, g) => n + g.count, 0);
+    const shown = S.allGaps ? groups : groups.slice(0, 8);
+    const tools = el('div', { class: 'row' },
+      junkCount ? el('button', { class: 'btn danger', text: `Remove the ${junkCount} step${junkCount === 1 ? '' : 's'} we could not understand at all`, onclick: async () => {
+        if (!confirm(`Remove ${junkCount} unreadable step${junkCount === 1 ? '' : 's'} (${junk.length} different text${junk.length === 1 ? '' : 's'}) from every test case? Steps that only need a value are kept.`)) return;
+        const drop = new Set(junk.map((g) => g.text));
+        for (const c of S.suite.cases) for (let i = c.steps.length - 1; i >= 0; i--) if (drop.has((c.steps[i] || '').trim())) { c.steps.splice(i, 1); c.interpreted.splice(i, 1); }
+        try { await saveSuite(); } catch (e) { fail(e); }
+      } }) : null,
+      S.suite.usecaseId ? el('button', { class: 'btn', text: '↻ Rebuild from the use case', title: 'Write the test cases again from the same use case with the latest generator', onclick: async (e) => {
+        if (!confirm('Write these test cases again from the use case? Changes you made here are replaced.')) return;
+        e.target.disabled = true;
+        try {
+          const out = await send(`/suites/${S.suite.id}/regenerate`, { method: 'rules' });
+          notice = { notes: out.notes, by: out.by, fallbackReason: out.fallbackReason, fresh: true };
+          S.suite = out.suite; S.dirty = false; S.open = new Set(); drawSuite(); toast('Rebuilt from the use case.');
+        } catch (err) { fail(err); }
+        e.target.disabled = false;
+      } }) : null);
+    return el('section', { class: 'gaps', id: 'gaps' },
+      el('div', { class: 'gapstitle' }, el('h3', { text: `Fix the gaps: ${total} step${total === 1 ? '' : 's'} need you` }),
+        el('span', { class: 'hint', text: `${groups.length} different step${groups.length === 1 ? '' : 's'}. Fix each one once here and it is fixed in every test case that has it.` }),
+        el('div', { class: 'hint', text: 'Steps that are always understood look like: Click the "Pay" button · Enter "jane@example.com" in the Email field · Select "UK" from the Country dropdown · Verify "Order placed" is displayed.' })),
+      tools,
+      ...shown.map(gapRow),
+      groups.length > shown.length ? el('button', { class: 'btn', text: `Show all ${groups.length}`, onclick: () => { S.allGaps = true; drawSuite(); } }) : null);
+  }
+
   function drawSuite() {
     const box = $('view-suite');
     const s = S.suite;
@@ -511,6 +622,7 @@
         el('button', { class: 'btn', text: '⬇ CSV', onclick: () => downloadBlob(`/suites/${s.id}/download?format=csv`, s.title.replace(/[^\w.-]+/g, '_') + '.csv') })),
       ...notes,
       el('div', { class: 'tiles', id: 'suiteTiles' }),
+      gapsPanel(),
       el('div', { class: 'runbox' }, field('App link to test', app, 'Where the app lives. The test cases run in a real browser against it.'), run),
       el('h3', { class: 'sec', text: 'Check how each step was read' }),
       el('p', { class: 'hint', style: 'margin:-6px 0 12px', text: 'Every step is shown with what we understood and how sure we are. Anything under 60% needs a rewrite, because we will not guess what you meant.' }),

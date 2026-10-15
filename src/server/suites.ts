@@ -40,6 +40,10 @@ export class SuiteStore {
     return Number(res.lastInsertRowid);
   }
 
+  getUseCase(id: number): { title: string; body: string } | undefined {
+    return this.db.prepare('SELECT title, body FROM usecases WHERE id = ?').get(id) as unknown as { title: string; body: string } | undefined;
+  }
+
   create(owner: number, input: { title: string; source: Suite['source']; usecaseId?: number; appUrl?: string; cases: TestCase[] }): Suite {
     const now = new Date().toISOString();
     const res = this.db

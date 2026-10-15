@@ -256,6 +256,16 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
         return json(res, 200, suiteView(updated!));
       }
       if (!action && method === 'DELETE') return json(res, 200, { deleted: suites.delete(sv.id) });
+      if (action === 'regenerate' && method === 'POST') {
+        // Writes the cases again from the same use case, with the current generator. Edits made since are replaced.
+        const uc = sv.usecaseId ? suites.getUseCase(sv.usecaseId) : undefined;
+        if (!uc) throw httpError(409, 'This set was uploaded, not generated from a use case, so it cannot be rebuilt. Use "Fix the gaps" instead.');
+        const b = await json_<{ method?: 'rules' | 'ai' }>(10_000);
+        if (b.method === 'ai' && aiConfigured()) aiAllowed(me.id);
+        const out = await generate(uc.body, { method: b.method === 'ai' ? 'ai' : 'rules' });
+        const updated = suites.update(sv.id, { cases: out.cases });
+        return json(res, 200, { suite: suiteView(updated!), notes: out.notes, by: out.by, fallbackReason: out.fallbackReason });
+      }
       if (action === 'download' && method === 'GET') {
         const format = url.searchParams.get('format') === 'csv' ? 'csv' : 'xlsx';
         const rows = casesToRows(sv.cases);
@@ -409,7 +419,7 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
 /** How the step reader understood a step, in a form the screen can show. */
 function interpret(text: string) {
   const p = parseStep(String(text));
-  return { text: String(text), action: p.action, target: p.target, hint: p.hint, value: p.value, check: p.check, confidence: p.confidence, notes: p.notes, summary: describeStep(p) };
+  return { text: String(text), action: p.action, target: p.target, hint: p.hint, value: p.value, check: p.check, confidence: p.confidence, notes: p.notes, needsValue: !!p.needsValue, summary: describeStep(p) };
 }
 
 function suiteView(sv: Suite) {

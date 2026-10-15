@@ -281,6 +281,13 @@
   .stepres { display: grid; grid-template-columns: 22px 1fr auto; gap: 2px 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; }
   .stepres:first-child { border-top: 0; } .stepres .ic { font-weight: 800; } .stepres.passed .ic { color: var(--ok); } .stepres.failed .ic { color: var(--bad); } .stepres.skipped .ic { color: var(--muted); }
   .stepres .sub { grid-column: 2 / 4; font-size: 12px; color: var(--muted); } .stepres .err { grid-column: 2 / 4; color: var(--bad); font-size: 13px; margin: 0; min-height: 0; }
+  .gaps { background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--warn); border-radius: 14px; box-shadow: var(--shadow); padding: 16px 20px; margin-top: 16px; display: grid; gap: 12px; }
+  .gapstitle h3 { margin: 0 0 2px; }
+  .gap { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; min-width: 0; }
+  .gaphead { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; } .gaphead b { overflow-wrap: anywhere; min-width: 0; }
+  .gapq { font-size: 13.5px; font-weight: 600; color: var(--text); }
+  .gapfix { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .gapfix input { flex: 1 1 260px; min-width: 0; width: auto; }
+  .gapread { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 13px; color: var(--muted); }
   .stepres img { max-width: 260px; border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; display: block; }
   .stepres { grid-template-columns: 22px minmax(0, 1fr) auto; }
   .stepres .what { min-width: 0; overflow-wrap: anywhere; }
