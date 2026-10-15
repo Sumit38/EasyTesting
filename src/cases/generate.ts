@@ -16,6 +16,46 @@ export interface Generated {
   /** Things the person should look at before running. */
   notes: string[];
   useCase: UseCase;
+  /** How well the use case was understood, for the person and for deciding whether to ask the AI instead. */
+  analysis: Analysis;
+}
+
+export interface Analysis {
+  title: string;
+  actor?: string;
+  /** What was found in the document. */
+  found: { flowSteps: number; alternates: number; rules: number; preconditions: number; scenarios: number };
+  /** Steps in the main test case. */
+  mainSteps: number;
+  /** 0-100: how sure the step reader is of the generated steps, on average. */
+  understood: number;
+  /** Steps under 60% across all cases: a name or a value is missing, or the step is unclear. */
+  needYou: number;
+  /** Sentences of the use case that could not become steps. */
+  leftOut: number;
+  quality: 'good' | 'fair' | 'poor';
+  summary: string;
+  advice: string[];
+}
+
+/** Grades what the generator made of a use case, and says what would make it better. */
+export function analyse(uc: UseCase, cases: TestCase[], notes: string[]): Analysis {
+  const all = cases.flatMap((c) => c.steps).map((s) => parseStep(s).confidence);
+  const understood = all.length ? Math.round((all.reduce((a, b) => a + b, 0) / all.length) * 100) : 0;
+  const needYou = all.filter((c) => c < 0.6).length;
+  const leftOut = notes.filter((n) => /left out|not a step here|outside the website/.test(n)).length;
+  const mainSteps = cases[0]?.steps.length ?? 0;
+  const found = { flowSteps: uc.mainFlow.length, alternates: uc.alternates.length, rules: uc.rules.length, preconditions: uc.preconditions.length, scenarios: uc.scenarios.length };
+  const quality: Analysis['quality'] = !cases.length || mainSteps < 3 || understood < 60 ? 'poor' : understood < 80 || needYou > 0 || leftOut > 3 ? 'fair' : 'good';
+  const advice: string[] = [];
+  if (!found.flowSteps && !found.scenarios) advice.push('No steps were found. Put the steps under a heading such as "Main Flow", one per line, each saying who does what: "The customer clicks Checkout".');
+  else if (mainSteps < 3) advice.push('Only a few steps could be read. Write each step as one action: who does what, for example "The customer enters the email" or "The system shows the order number".');
+  if (leftOut) advice.push(`${leftOut} sentence${leftOut === 1 ? ' was' : 's were'} not turned into steps (things that happen outside the browser, done by someone else, or not an action). They are listed in the notes.`);
+  if (needYou) advice.push(`${needYou} step${needYou === 1 ? ' needs' : 's need'} a name or a value the use case does not give. Fill them in with "Fix the gaps" on the next screen.`);
+  if (!found.alternates && !found.scenarios && cases.length) advice.push('There is no "Alternate Flows" section, so only the main flow and field checks were written. Add the error cases you care about to get tests for them.');
+  const summary = !cases.length ? 'No test cases could be written from this text.'
+    : `Found ${found.flowSteps || found.scenarios} ${found.flowSteps ? 'flow steps' : 'scenarios'}${found.alternates ? `, ${found.alternates} alternate flow${found.alternates === 1 ? '' : 's'}` : ''}${found.rules ? `, ${found.rules} rule${found.rules === 1 ? '' : 's'}` : ''}; wrote ${cases.length} test case${cases.length === 1 ? '' : 's'} and understood ${understood}% of their steps.`;
+  return { title: uc.title, actor: uc.actor, found, mainSteps, understood, needYou, leftOut, quality, summary, advice };
 }
 
 type Kind = 'email' | 'password' | 'phone' | 'date' | 'postal' | 'number' | 'url' | 'text';
@@ -300,5 +340,6 @@ export function generateCases(text: string, opts: GenerateOptions = {}): Generat
 
   const guessed = cases.filter((c) => c.basis === 'assumed').length;
   if (guessed) notes.push(`${guessed} case${guessed === 1 ? ' rests' : 's rest'} on assumptions: the use case does not say whether those fields are required or limited, so what should happen is a guess. They are marked "Assumed" in the sheet. If the app behaves differently and that is fine, change the last step or delete the case.`);
-  return { cases, notes: [...new Set(notes)], useCase: uc };
+  const unique = [...new Set(notes)];
+  return { cases, notes: unique, useCase: uc, analysis: analyse(uc, cases, unique) };
 }

@@ -142,11 +142,12 @@
     const start_ = text('Optional: /login (the page to open first)');
     const app = text('Optional: https://staging.yourapp.com (used when you run them)');
     const data = el('textarea', { rows: 3, placeholder: 'Optional, one per line:\nemail=sam@example.com\npassword=Secret123!' });
-    let method = 'rules';
+    let method = 'auto';
     const radios = el('div', { class: 'radios' });
     const paint = () => {
       radios.replaceChildren(...[
-        ['rules', 'Standard (works offline)', 'Reads your headings and steps and writes positive, negative, boundary and alternate-flow cases. Nothing leaves this server.', true],
+        ['auto', 'Automatic (recommended)', ai.available ? 'Reads your use case, whatever its layout, and checks how well it understood it. If the reading is poor, Claude reads it instead. The text leaves this server only then.' : 'Reads your use case, whatever its layout, checks how well it understood it, and tells you what to change if something is unclear.', true],
+        ['rules', 'Standard only (works offline)', 'Reads your headings and steps and writes positive, negative, boundary and alternate-flow cases. Nothing leaves this server.', true],
         ['ai', 'Improve with AI (Claude)', ai.available ? 'Writes broader cases from the same text. The use case is sent to Anthropic. If it fails, the standard method is used instead.' : 'Not set up on this server. An admin can enable it by setting ANTHROPIC_API_KEY.', ai.available],
       ].map(([v, t, d, enabled]) => el('label', { class: 'radio' + (method === v ? ' on' : '') + (enabled ? '' : ' off') },
         el('input', { type: 'radio', name: 'method', value: v, checked: method === v, disabled: !enabled, onchange: () => { method = v; paint(); } }), el('div', {}, el('b', { text: t }), el('span', { text: d })))));
@@ -166,10 +167,10 @@
     go.onclick = async () => {
       err.textContent = '';
       go.disabled = true;
-      go.textContent = method === 'ai' ? 'Asking Claude…' : 'Generating…';
+      go.textContent = method === 'ai' ? 'Asking Claude…' : 'Reading your use case…';
       try {
         const out = await send('/usecases/generate', { title: title.value, text: body.value, method, startPage: start_.value, testData: data.value, appUrl: app.value });
-        notice = { notes: out.notes, by: out.by, fallbackReason: out.fallbackReason, fresh: true };
+        notice = { notes: out.notes, by: out.by, fallbackReason: out.fallbackReason, switched: out.switched, analysis: out.analysis, fresh: true };
         location.hash = '#/suite/' + out.suite.id;
       } catch (e) { err.textContent = e.message; }
       go.disabled = false;
@@ -571,8 +572,8 @@
         if (!confirm('Write these test cases again from the use case? Changes you made here are replaced.')) return;
         e.target.disabled = true;
         try {
-          const out = await send(`/suites/${S.suite.id}/regenerate`, { method: 'rules' });
-          notice = { notes: out.notes, by: out.by, fallbackReason: out.fallbackReason, fresh: true };
+          const out = await send(`/suites/${S.suite.id}/regenerate`, { method: 'auto' });
+          notice = { notes: out.notes, by: out.by, fallbackReason: out.fallbackReason, switched: out.switched, analysis: out.analysis, fresh: true };
           S.suite = out.suite; S.dirty = false; S.open = new Set(); drawSuite(); toast('Rebuilt from the use case.');
         } catch (err) { fail(err); }
         e.target.disabled = false;
@@ -595,6 +596,10 @@
     app.id = 'suiteApp';
     app.oninput = () => markDirty();
     const run = el('button', { class: 'btn primary big', text: '▶ Run these test cases' });
+    // Remembered per browser: someone who wants to stop at the first failure usually wants it every time.
+    const stopFirst = el('input', { type: 'checkbox' });
+    try { stopFirst.checked = localStorage.getItem('et-stop-first') === '1'; } catch { /* storage blocked */ }
+    stopFirst.onchange = () => { try { localStorage.setItem('et-stop-first', stopFirst.checked ? '1' : '0'); } catch { /* storage blocked */ } };
     run.onclick = async () => {
       const link = app.value.trim();
       if (!/^https?:\/\/\S+$/i.test(link)) return toast('Enter the app link first, starting with http:// or https://');
@@ -602,15 +607,32 @@
       try {
         if (S.dirty) await saveSuite();
         else if (link !== s.appUrl) await send('/suites/' + s.id, { appUrl: link }, 'PUT');
-        const r = await send(`/suites/${s.id}/run`, { appUrl: link });
+        const r = await send(`/suites/${s.id}/run`, { appUrl: link, stopOnFail: stopFirst.checked });
         location.hash = '#/run/' + r.id;
       } catch (e) { fail(e); }
       run.disabled = false;
     };
     const notes = [];
     if (notice && notice.fresh) {
+      const a = notice.analysis;
+      if (a) {
+        // What the tool made of the use case, before anyone runs anything.
+        const word = { good: ['Understood well', 'good'], fair: ['Mostly understood', 'mid'], poor: ['Poorly understood', 'low'] }[a.quality];
+        notes.push(el('section', { class: 'analysis' },
+          el('div', { class: 'gaphead' }, el('h3', { text: 'What we found in your use case' }), el('span', { class: 'pill ' + word[1], text: word[0] })),
+          el('p', { text: a.summary }),
+          el('div', { class: 'counts' },
+            el('span', {}, el('b', { text: String(a.found.flowSteps) }), a.found.flowSteps === 1 ? ' flow step' : ' flow steps'),
+            el('span', {}, el('b', { text: String(a.found.alternates) }), a.found.alternates === 1 ? ' alternate flow' : ' alternate flows'),
+            el('span', {}, el('b', { text: String(a.found.rules) }), a.found.rules === 1 ? ' business rule' : ' business rules'),
+            el('span', {}, el('b', { text: String(a.found.preconditions) }), a.found.preconditions === 1 ? ' precondition' : ' preconditions'),
+            a.found.scenarios ? el('span', {}, el('b', { text: String(a.found.scenarios) }), ' Given/When/Then scenarios') : null,
+            a.actor ? el('span', {}, 'Actor: ', el('b', { text: a.actor })) : null),
+          a.advice.length ? el('ul', {}, ...a.advice.map((t) => el('li', { text: t }))) : null));
+      }
+      if (notice.switched) notes.push(el('div', { class: 'note good' }, el('b', { text: 'Read by Claude. ' }), notice.switched));
       if (notice.fallbackReason) notes.push(el('div', { class: 'note' }, el('b', { text: 'AI was not used. ' }), notice.fallbackReason + ' The standard method wrote these cases instead.'));
-      else if (notice.by === 'ai') notes.push(el('div', { class: 'note good', text: 'Written with Claude. Every step was checked against the step reader; review them before you run.' }));
+      else if (notice.by === 'ai' && !notice.switched) notes.push(el('div', { class: 'note good', text: 'Written with Claude. Every step was checked against the step reader; review them before you run.' }));
       for (const n of (notice.notes || []).slice(0, 8)) notes.push(el('div', { class: 'note', text: n }));
       for (const w of notice.warnings || []) notes.push(el('div', { class: 'note', text: w }));
       notice = null;
@@ -623,7 +645,8 @@
       ...notes,
       el('div', { class: 'tiles', id: 'suiteTiles' }),
       gapsPanel(),
-      el('div', { class: 'runbox' }, field('App link to test', app, 'Where the app lives. The test cases run in a real browser against it.'), run),
+      el('div', { class: 'runbox' }, field('App link to test', app, 'Where the app lives. The test cases run in a real browser against it.'),
+        el('div', { class: 'runside' }, run, el('label', { class: 'check', title: 'When one test case fails, the rest are not run. Useful when a broken page would make every later case fail too.' }, stopFirst, ' Stop at the first failed test case'))),
       el('h3', { class: 'sec', text: 'Check how each step was read' }),
       el('p', { class: 'hint', style: 'margin:-6px 0 12px', text: 'Every step is shown with what we understood and how sure we are. Anything under 60% needs a rewrite, because we will not guess what you meant.' }),
       ...s.cases.map(caseCard),
@@ -645,9 +668,21 @@
   const STEP_WORD = { passed: ['✔', 'Done'], failed: ['✖', 'Failed'], running: ['●', 'Running now'], pending: ['○', 'Waiting'], skipped: ['–', 'Not run'] };
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
+  /** Stop testing: the step in progress finishes, finished cases keep their results, the rest are not run. */
+  const stopButton = (run) => el('button', { class: 'btn danger stopbtn', text: S_STOPPING.has(run.id) ? 'Stopping…' : '■ Stop testing', disabled: S_STOPPING.has(run.id), onclick: async (e) => {
+    if (!confirm('Stop testing now?\n\nThe step in progress finishes. Test cases already finished keep their results; the rest are marked "Not run" and are not counted as failures.')) return;
+    S_STOPPING.add(run.id);
+    e.target.disabled = true;
+    e.target.textContent = 'Stopping…';
+    try { await send('/runs/' + run.id + '/stop', {}); } catch (err) { fail(err); }
+  } });
+  const S_STOPPING = new Set();
+
   Ext.afterRun.push(async (run) => {
     const isCases = run.kind === 'cases';
     const active = ['queued', 'installing', 'running'].includes(run.status);
+    // For test cases the Stop button sits in the progress card, where people look while it runs.
+    if (isCases) $('stop').classList.add('hidden');
     $('download').classList.toggle('hidden', isCases);
     if (isCases) $('apply').classList.add('hidden');
     // The locator tiles and the Install phase mean nothing for test cases written in plain English.
@@ -676,7 +711,9 @@
     const first = box.children.length === 0 || box.dataset.run !== run.id || (box.dataset.going === '1' && !going);
     box.dataset.run = run.id;
     box.dataset.going = going ? '1' : '0';
-    const cases = data.cases || [];
+    let cases = data.cases || [];
+    // A run that has ended but left steps marked as waiting or running (it was ended by force): those never ran.
+    if (!active) cases = cases.map((c) => (c.status === 'running' || c.status === 'pending' ? { ...c, status: 'skipped', steps: c.steps.map((s) => (s.status === 'running' || s.status === 'pending' ? { ...s, status: 'skipped' } : s)) } : c));
     const count = (st) => cases.filter((c) => c.status === st).length;
     const passed = count('passed'), failed = count('failed'), blocked = count('blocked'), notRun = count('skipped');
     const finished = passed + failed + blocked + notRun;
@@ -687,12 +724,16 @@
     let title, now, tone;
     if (!cases.length) {
       title = active ? 'Getting ready…' : 'No results'; now = active ? 'Starting the browser and opening your app.' : 'The run stopped before any test case started. Open the technical log below to see why.'; tone = active ? 'going' : 'done-bad';
+    } else if (run.status === 'stopped' || (!active && data.stopped && /by you/.test(data.stopped))) {
+      title = `Stopped: ${passed} passed, ${failed} failed, ${notRun} not run`;
+      now = 'You stopped the test run. Finished test cases keep their results; the others were not run and are not counted as failures.';
+      tone = 'done-stop';
     } else if (active || data.running) {
       title = `Running test case ${Math.min(finished + 1, cases.length)} of ${cases.length}`;
       now = cur ? `${cur.id} · ${cur.title}${curStep ? ` — step ${curStep.index + 1} of ${cur.steps.length}: ${curStep.text}` : ''}` : run.status === 'queued' ? 'Waiting for a free slot on the server…' : 'Starting…';
       tone = 'going';
     } else {
-      title = failed || blocked ? `${passed} of ${cases.length} test cases passed` : `All ${plural(cases.length, 'test case', 'test cases')} passed`;
+      title = data.stopped ? `Stopped at the first failure: ${passed} passed, ${failed} failed, ${notRun} not run` : failed || blocked ? `${passed} of ${cases.length} test cases passed` : `All ${plural(cases.length, 'test case', 'test cases')} passed`;
       const firstBad = cases.find((c) => c.status === 'failed' || c.status === 'blocked');
       now = firstBad ? `${firstBad.id} ${firstBad.status === 'blocked' ? 'was blocked' : 'failed'}: ${(firstBad.steps.find((s) => s.status === 'failed') || {}).error || firstBad.advice || ''}` : 'Every step did what the test case said, on the real app.';
       tone = failed ? 'done-bad' : blocked ? 'done-warn' : 'done-ok';
@@ -708,8 +749,8 @@
     box.replaceChildren(
       el('div', { class: 'prog ' + tone },
         el('div', {},
-          el('h2', { text: title }),
-          el('p', { class: 'now', text: now }),
+          el('div', { class: 'proghead' }, el('div', {}, el('h2', { text: title }), el('p', { class: 'now', text: now })),
+            active ? stopButton(run) : null),
           el('div', { class: 'segs', title: 'One block per test case' }, ...cases.map((c) => el('span', { class: c.status, title: `${c.id}: ${(CASE_WORD[c.status] || [c.status])[0]}` }))),
           el('div', { class: 'counts' },
             el('span', { class: 'ok' }, el('b', { text: '✔ ' + passed }), ' passed'),

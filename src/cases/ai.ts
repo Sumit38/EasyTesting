@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { generateCases, type GenerateOptions, type Generated } from './generate.js';
+import { analyse, generateCases, type GenerateOptions, type Generated } from './generate.js';
 import type { TestCase } from './model.js';
 import { parseStep } from './steps.js';
 import { parseUseCase } from './usecase.js';
@@ -150,7 +150,7 @@ export async function generateWithAi(text: string, opts: GenerateOptions, client
       source: `Use case: ${useCase.title} (AI)`,
     }));
   if (!cases.length) throw new AiError('The AI returned no usable test cases.');
-  return { cases, notes, useCase };
+  return { cases, notes, useCase, analysis: analyse(useCase, cases, notes) };
 }
 
 export interface Outcome extends Generated {
@@ -158,26 +158,43 @@ export interface Outcome extends Generated {
   by: 'ai' | 'rules';
   /** Why the rule-based generator was used instead of the AI one, when it was asked for. */
   fallbackReason?: string;
+  /** In automatic mode: why the AI was asked after the standard reading, in words for the person. */
+  switched?: string;
 }
 
 /** Generates with the chosen method. When AI is asked for and fails, the rules answer instead and say why. */
-export async function generate(text: string, opts: GenerateOptions & { method?: 'rules' | 'ai' }, client?: AiClient): Promise<Outcome> {
+async function clientFor(client?: AiClient): Promise<AiClient> {
+  if (client) return client;
+  if (!aiConfigured()) throw new AiError('No Anthropic API key is set on the server (ANTHROPIC_API_KEY).');
+  const { default: Sdk } = await import('@anthropic-ai/sdk');
+  return new Sdk() as unknown as AiClient;
+}
+
+/**
+ * 'rules' reads the use case with the built-in reader. 'ai' asks Claude, falling back to the rules. 'auto' reads with the rules,
+ * checks how well that went, and asks Claude only when the reading is poor and `allowAi` is true: any layout works, and the
+ * use case leaves the server only when the built-in reader could not make sense of it.
+ */
+export async function generate(text: string, opts: GenerateOptions & { method?: 'rules' | 'ai' | 'auto'; allowAi?: boolean }, client?: AiClient): Promise<Outcome> {
   if (opts.method === 'ai') {
     try {
-      let c = client;
-      if (!c) {
-        if (!aiConfigured()) throw new AiError('No Anthropic API key is set on the server (ANTHROPIC_API_KEY).');
-        const { default: Sdk } = await import('@anthropic-ai/sdk');
-        c = new Sdk() as unknown as AiClient;
-      }
-      return { ...(await generateWithAi(text, opts, c)), by: 'ai' };
+      return { ...(await generateWithAi(text, opts, await clientFor(client))), by: 'ai' };
     } catch (e) {
       const rules = generateCases(text, opts);
       return { ...rules, by: 'rules', fallbackReason: e instanceof AiError ? e.message : `The AI step failed: ${(e as Error).message}` };
     }
   }
-  return { ...generateCases(text, opts), by: 'rules' };
+  const rules = generateCases(text, opts);
+  if (opts.method !== 'auto' || rules.analysis.quality !== 'poor' || !opts.allowAi) return { ...rules, by: 'rules' };
+  try {
+    const ai = await generateWithAi(text, opts, await clientFor(client));
+    if (ai.analysis.understood < rules.analysis.understood && ai.cases.length <= rules.cases.length) return { ...rules, by: 'rules' };
+    return { ...ai, by: 'ai', switched: `The standard reader understood only ${rules.analysis.understood}% of this use case (${rules.analysis.mainSteps} steps in the main case), so Claude read it instead.` };
+  } catch (e) {
+    return { ...rules, by: 'rules', fallbackReason: e instanceof AiError ? e.message : `The AI step failed: ${(e as Error).message}` };
+  }
 }
+
 
 const REWRITE_SCHEMA = {
   type: 'object',

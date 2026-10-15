@@ -119,3 +119,33 @@ describe('AI generation', () => {
     }
   });
 });
+
+describe('automatic mode: the tool checks its own reading', () => {
+  let calls = 0;
+  const client: AiClient = { messages: { create: async () => { calls++; return message(good); } } };
+  const messy = 'Newsletter\nWe would like people to be able to get our news by e-mail somehow, ideally from the home page, it should be easy and quick and nice.';
+
+  it('keeps the built-in reading when it understood the use case, so nothing is sent to the AI', async () => {
+    calls = 0;
+    const out = await generate(text, { method: 'auto', allowAi: true }, client);
+    assert.equal(out.by, 'rules');
+    assert.equal(calls, 0);
+    assert.notEqual(out.analysis.quality, 'poor');
+    assert.match(out.analysis.summary, /flow steps/);
+  });
+
+  it('asks the AI only when its own reading is poor, and says why', async () => {
+    calls = 0;
+    const out = await generate(messy, { method: 'auto', allowAi: true }, client);
+    assert.equal(calls, 1);
+    assert.equal(out.by, 'ai');
+    assert.match(out.switched ?? '', /understood only/);
+  });
+
+  it('without the AI, keeps its own reading and explains what to change', async () => {
+    const out = await generate(messy, { method: 'auto', allowAi: false }, client);
+    assert.equal(out.by, 'rules');
+    assert.equal(out.analysis.quality, 'poor');
+    assert.ok(out.analysis.advice.some((a) => /Main Flow|one action/.test(a)), out.analysis.advice.join(' | '));
+  });
+});

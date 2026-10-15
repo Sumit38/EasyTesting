@@ -13,7 +13,7 @@ if (!file) {
   console.error('Usage: cli.js <cases.json>');
   process.exit(2);
 }
-const { cases } = JSON.parse(readFileSync(file, 'utf8')) as { cases: TestCase[] };
+const { cases, stopOnFail } = JSON.parse(readFileSync(file, 'utf8')) as { cases: TestCase[]; stopOnFail?: boolean };
 const healDir = process.env.HEAL_DIR ?? '.heal';
 const appUrl = process.env.APP_URL;
 if (!appUrl) {
@@ -23,7 +23,7 @@ if (!appUrl) {
 
 try {
   const { results, passed } = await runCases({
-    cases, appUrl, healDir, blockPrivate: process.env.HEAL_BLOCK_PRIVATE === '1', storeFile: process.env.HEAL_STORE ?? join(healDir, 'fingerprints.db'), log: (l) => console.log(l),
+    cases, appUrl, healDir, blockPrivate: process.env.HEAL_BLOCK_PRIVATE === '1', stopFile: join(healDir, 'stop'), stopOnFail: !!stopOnFail, storeFile: process.env.HEAL_STORE ?? join(healDir, 'fingerprints.db'), log: (l) => console.log(l),
   });
   const count = (s: string) => results.filter((r) => r.status === s).length;
   console.log(`\n${results.length} test cases: ${count('passed')} passed, ${count('failed')} failed, ${count('skipped')} skipped${count('blocked') ? `, ${count('blocked')} blocked (a page would not load)` : ''}.`);

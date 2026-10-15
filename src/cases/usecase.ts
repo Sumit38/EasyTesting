@@ -31,7 +31,14 @@ const HEADINGS: [RegExp, Section][] = [
   [/^(?:description|summary|overview|goal|purpose)\s*[:\-–]?\s*(.*)$/i, 'description'],
 ];
 
-const ITEM = /^\s*(?:(?:step\s*)?\d+[a-z]?[.):]|[a-z]\d+[.):]|\d+(?:\.\d+)+[.)]?|[-*•–]|[a-z][.)])\s+/i;
+const ITEM = /^\s*(?:(?:step\s*)?\d+[a-z]?[.):]|step\s*\d+[a-z]?\s*[-–]|\d+[a-z]?\s+[-–]|[a-z]\d+[.):]|\d+(?:\.\d+)+[.)]?|[-*•–]|[a-z][.)])\s+/i;
+
+/** "1. Open the site. 2. Click Login. 3. ..." typed as one line: one item per number. */
+function splitInline(item: string): string[] {
+  if (!/(?:^|\s)2[.)]\s/.test(item) || !/(?:^|\s)1[.)]\s|^[^0-9]/.test(item)) return [item];
+  const parts = item.split(/\s+(?=\d{1,2}[.)]\s)/).map((p) => p.replace(ITEM, '').trim()).filter(Boolean);
+  return parts.length > 1 ? parts : [item];
+}
 
 /** Titles that say what the document is, not what it is about. */
 const GENERIC_TITLE = /^(?:(?:professional|detailed|full|complete|sample)\s+)?(?:use ?case|requirements?|functional)\s+(?:document|specification|spec|template|description)$/i;
@@ -65,7 +72,9 @@ function plainLines(text: string): { line: string; heading: boolean }[] {
     const dashed = l.split(/\s+-\s+/);
     if (dashed.length >= 2 && dashed.every((c) => COLUMN_NAME.test(c.trim()))) continue; // "Step - Actor - Action": the heading row of a sheet
     // A table row: from Markdown ("| 1 | Customer | Opens the site |") or a sheet read as text ("1 - Customer - Opens the site").
-    const cells = /^\|.*\|$/.test(l) ? l.slice(1, -1).split('|').map(unmark).filter(Boolean) : /^(?:step\s*)?\d+[a-z]?[.)]?\s+-\s+.+\s+-\s+/i.test(l) ? l.split(/\s+-\s+/).map(unmark) : undefined;
+    const cells = /^\|.*\|$/.test(l) ? l.slice(1, -1).split('|').map(unmark).filter(Boolean)
+      : raw.includes('\t') && raw.trim().split(/\t+/).length >= 2 ? raw.trim().split(/\t+/).map(unmark).filter(Boolean) // copied from Excel or Word tables
+      : /^(?:step\s*)?\d+[a-z]?[.)]?\s+-\s+.+\s+-\s+/i.test(l) ? l.split(/\s+-\s+/).map(unmark) : undefined;
     if (cells) {
       const steps = rowSteps(cells);
       if (steps) {
@@ -73,7 +82,7 @@ function plainLines(text: string): { line: string; heading: boolean }[] {
         continue;
       }
       // A two-column "field | value" table becomes "Field: value"; its header row ("Field | Details") says nothing.
-      if (/^\|/.test(l)) {
+      if (/^\|/.test(l) || raw.includes('\t')) {
         if (cells.length === 2 && /^(?:field|attribute|item|property|name|section|key)$/i.test(cells[0]) && /^(?:details?|value|description|information|content)$/i.test(cells[1])) continue;
         out.push({ line: cells.length === 2 ? `${cells[0]}: ${cells[1]}` : cells.join(' - '), heading: false });
         continue;
@@ -97,6 +106,8 @@ export function parseUseCase(text: string): UseCase {
   let gwtPart: 'given' | 'when' | 'then' = 'given';
 
   const push = (to: Section | undefined, item: string) => {
+    const pieces = to === 'main' || to === 'alt' || to === 'pre' || to === 'post' ? splitInline(item) : [item];
+    if (pieces.length > 1) return pieces.forEach((p) => push(to, p));
     const t = item.trim();
     if (!t) return;
     if (to === 'pre') uc.preconditions.push(t);

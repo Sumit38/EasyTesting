@@ -15,7 +15,7 @@ import { applyInDir, loadRecords } from '../apply.js';
 import type { HealRecord } from '../core.js';
 
 export type Framework = 'playwright' | 'selenium' | 'custom';
-export type RunStatus = 'queued' | 'installing' | 'running' | 'passed' | 'failed' | 'error' | 'timeout';
+export type RunStatus = 'queued' | 'installing' | 'running' | 'passed' | 'failed' | 'error' | 'timeout' | 'stopped';
 
 export interface Run {
   id: string;
@@ -117,6 +117,8 @@ export class RunManager {
   /** The application database. Shared with the web layer for accounts and test-case suites. */
   readonly app: AppDb;
   private readonly procs = new Map<string, ChildProcess>();
+  /** Runs a person asked to stop: they end as 'stopped', not as failed. */
+  private readonly stopping = new Set<string>();
   private readonly maxConcurrent: number;
   private active = 0;
   private readonly blockPrivate: boolean;
@@ -263,7 +265,7 @@ export class RunManager {
   }
 
   /** Starts a run of plain-English test cases with the built-in executor. */
-  createCases(input: { title: string; appUrl: string; cases: import('../cases/model.js').TestCase[]; owner?: number; suite?: number }): Run {
+  createCases(input: { title: string; appUrl: string; cases: import('../cases/model.js').TestCase[]; owner?: number; suite?: number; stopOnFail?: boolean }): Run {
     const id = randomBytes(6).toString('hex');
     const run: Run = {
       id, name: input.title, framework: 'custom', appUrl: input.appUrl, command: 'Built-in test-case runner', install: false, status: 'queued',
@@ -271,7 +273,7 @@ export class RunManager {
     };
     mkdirSync(this.projectDir(id), { recursive: true });
     mkdirSync(this.healDir(id), { recursive: true });
-    writeFileSync(join(this.projectDir(id), 'cases.json'), JSON.stringify({ title: input.title, appUrl: input.appUrl, cases: input.cases }, null, 2));
+    writeFileSync(join(this.projectDir(id), 'cases.json'), JSON.stringify({ title: input.title, appUrl: input.appUrl, cases: input.cases, stopOnFail: !!input.stopOnFail }, null, 2));
     this.save(run);
     this.launch(run);
     return run;
@@ -299,8 +301,8 @@ export class RunManager {
     if (!old) return undefined;
     if (old.demo) return this.createDemo(old.appUrl, old.demo, old.owner);
     if (old.kind === 'cases') {
-      const saved = JSON.parse(readFileSync(join(this.projectDir(id), 'cases.json'), 'utf8')) as { title: string; cases: import('../cases/model.js').TestCase[] };
-      return this.createCases({ title: old.name, appUrl: old.appUrl, cases: saved.cases, owner: old.owner, suite: old.suite });
+      const saved = JSON.parse(readFileSync(join(this.projectDir(id), 'cases.json'), 'utf8')) as { title: string; cases: import('../cases/model.js').TestCase[]; stopOnFail?: boolean };
+      return this.createCases({ title: old.name, appUrl: old.appUrl, cases: saved.cases, owner: old.owner, suite: old.suite, stopOnFail: saved.stopOnFail });
     }
     const nid = randomBytes(6).toString('hex');
     const run: Run = { ...old, id: nid, status: 'queued', createdAt: new Date().toISOString(), finishedAt: undefined, exitCode: undefined };
@@ -329,8 +331,8 @@ export class RunManager {
     if (this.active >= this.maxConcurrent) await new Promise<void>((go) => this.waiting.push(go));
     this.active++;
     try {
-      // A run deleted while it waited has nothing left to run.
-      if (this.get(run.id)) await this.execute(run, extraEnv);
+      // A run deleted or stopped while it waited has nothing left to run.
+      if (this.get(run.id)?.status === 'queued') await this.execute(run, extraEnv);
     } finally {
       this.active--;
       this.waiting.shift()?.();
@@ -402,6 +404,7 @@ export class RunManager {
   }
 
   private endRun(run: Run, log: NodeJS.WritableStream, status: RunStatus, code?: number | null) {
+    if (this.stopping.delete(run.id)) status = 'stopped';
     log.end(`\n[runner] finished: ${status}${code === undefined || code === null ? '' : ` (exit ${code})`}\n`);
     this.finish(run, status, code);
     // Update the project's bug list from this run's results, once the log is on disk.
@@ -431,6 +434,8 @@ export class RunManager {
   private reconcile(id: string) {
     const run = this.get(id);
     if (!run || ACTIVE.includes(run.status)) return;
+    // A test project killed part-way has no results of its own; without them the whole run would be filed as one failure.
+    if (run.status === 'stopped' && !readResults(this.healDir(id))) return;
     const marker = join(this.healDir(id), 'reconciled');
     if (existsSync(marker)) return;
     const scenarios = this.scenarios(run.project).scenarios;
@@ -487,10 +492,24 @@ export class RunManager {
     };
   }
 
+  /**
+   * Stops a run. A queued run never starts. A test-case run is asked to stop: the step in progress finishes, finished cases keep
+   * their results and the rest are reported as not run; if it has not ended within 20 seconds it is ended by force. A test
+   * project is ended at once.
+   */
   stop(id: string): boolean {
+    const run = this.get(id);
+    if (!run || !ACTIVE.includes(run.status)) return false;
     const p = this.procs.get(id);
-    if (!p) return false;
-    killTree(p);
+    if (!p) {
+      this.save({ ...run, status: 'stopped', finishedAt: new Date().toISOString() });
+      return true;
+    }
+    this.stopping.add(id);
+    if (run.kind === 'cases') {
+      writeFileSync(join(this.healDir(id), 'stop'), new Date().toISOString());
+      setTimeout(() => this.procs.get(id) === p && killTree(p), 20_000).unref();
+    } else killTree(p);
     return true;
   }
 

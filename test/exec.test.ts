@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -116,6 +116,32 @@ describe('running plain-English test cases', () => {
     const { results } = await runCases({ cases, appUrl: `${origin}/demo/login?v=2`, healDir: join(dir, 'h5'), storeFile: store, stepTimeout: 4000 });
     assert.deepEqual(results.filter((r) => r.status !== 'passed').map((r) => r.id), [], '\n' + summary(results));
     assert.equal(loadRecords(join(dir, 'h5')).length, 0, 'nothing left to heal');
+  });
+
+  it('stops when asked: the step in progress finishes, nothing after it runs, and nothing counts as a failure', async () => {
+    const heal = join(dir, 'h10');
+    const stopFile = join(heal, 'stop');
+    const two = cases.slice(0, 2);
+    const { results } = await runCases({
+      cases: two, appUrl: `${origin}/demo/login?v=1`, healDir: heal, storeFile: join(dir, 's.db'), stepTimeout: 4000, stopFile,
+      // The tester presses Stop while the first step of the first case is running.
+      log: (l) => { if (/✔ 1\./.test(l)) writeFileSync(stopFile, 'stop'); },
+    });
+    assert.deepEqual(results.map((r) => r.status), ['skipped', 'skipped']);
+    assert.equal(results[0].steps[0].status, 'passed', 'the step that was running finished');
+    assert.ok(results[0].steps.slice(1).every((s) => s.status === 'skipped'));
+    assert.match(results[0].advice ?? '', /Stopped by you/);
+    const end = JSON.parse(readFileSync(join(heal, 'steps.json'), 'utf8'));
+    assert.match(end.stopped, /stopped by you/);
+    const reported = JSON.parse(readFileSync(join(heal, 'results.json'), 'utf8')).tests;
+    assert.ok(reported.every((t: { status: string }) => t.status === 'skipped'), 'no bug can come from a stopped case');
+  });
+
+  it('can stop at the first failed test case instead of failing the rest against a broken page', async () => {
+    const broken: TestCase = { id: 'TC-X', title: 'Looks for text that is not there', steps: ['Open the application', 'Verify "No such text anywhere" is displayed'], expected: '' };
+    const { results } = await runCases({ cases: [broken, cases[0]], appUrl: `${origin}/demo/login?v=1`, healDir: join(dir, 'h11'), storeFile: join(dir, 'f.db'), stepTimeout: 1500, stopOnFail: true });
+    assert.deepEqual(results.map((r) => r.status), ['failed', 'skipped']);
+    assert.match(results[1].advice ?? '', /stopped after TC-X failed/);
   });
 
   it('shows its progress while it runs: every case and step from the start, then each one as it finishes', async () => {

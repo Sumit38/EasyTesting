@@ -1,3 +1,4 @@
+import { decodeText } from '../cases/decode.js';
 import { parseCsvRows } from './csv.js';
 import { looksLikeXlsx, readXlsx } from './xlsx.js';
 
@@ -8,5 +9,6 @@ export function readSheet(data: Uint8Array, filename: string): string[][] {
     return readXlsx(data);
   }
   if (/\.xls$/i.test(filename)) throw new Error('Old .xls files are not supported. In Excel choose Save As and pick .xlsx or CSV.');
-  return parseCsvRows(new TextDecoder('utf-8').decode(data));
+  // Excel saves CSV in the Windows code page, and "Unicode text" as UTF-16: read both, not only UTF-8.
+  return parseCsvRows(decodeText(data));
 }

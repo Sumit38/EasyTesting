@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { AutoHealer } from '../auto/auto-healer.js';
@@ -24,6 +24,10 @@ export interface RunOptions {
   stepTimeout?: number;
   /** Refuse any address that is not on the public internet (this machine, private networks, files). On for shared servers. */
   blockPrivate?: boolean;
+  /** A file whose appearance means "stop": the current step finishes, the rest is reported as not run. */
+  stopFile?: string;
+  /** Stop after the first test case that fails, instead of running the rest against a broken app. */
+  stopOnFail?: boolean;
   log?: (line: string) => void;
 }
 
@@ -168,11 +172,19 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
     }
   };
   publish();
+  let stopped: string | undefined; // why the remaining cases were not run
   const browser = await launchBrowser(opts.headless !== false && process.env.HEADED !== '1');
   const base = new URL(opts.appUrl);
 
   try {
     for (const [k, c] of opts.cases.entries()) {
+      if (!stopped && opts.stopFile && existsSync(opts.stopFile)) stopped = 'Testing was stopped by you.';
+      if (stopped) {
+        // Not run: reported as such, never as a pass or a failure.
+        results.push({ ...live[k], status: 'skipped', steps: live[k].steps.map((st) => ({ ...st, status: 'skipped' as const })), advice: stopped });
+        live[k] = results[results.length - 1];
+        continue;
+      }
       const started = Date.now();
       if (c.steps.length) live[k].status = 'running';
       const label = `${c.id} ${c.title}`;
@@ -187,6 +199,7 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
       healer.setTest(label);
       const steps: StepResult[] = [];
       let failed = false;
+      let cut = false; // stopped part-way through this case
 
       for (let i = 0; i < c.steps.length; i++) {
         const text = c.steps[i];
@@ -198,7 +211,11 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
         };
         steps.push(r);
         live[k].steps[i] = r;
-        if (failed) continue;
+        if (!failed && !stopped && opts.stopFile && existsSync(opts.stopFile)) {
+          stopped = 'Testing was stopped by you.';
+          cut = true;
+        }
+        if (failed || cut) continue;
         r.status = 'running';
         publish({ case: k, step: i });
         if (parsed.action === 'unknown') {
@@ -255,19 +272,25 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
       const failedStep = steps.find((s) => s.status === 'failed');
       results.push({
         id: c.id, title: c.title, steps, durationMs: Date.now() - started,
-        status: !c.steps.length ? 'skipped' : failedStep?.environment ? 'blocked' : failedStep ? 'failed' : 'passed',
+        // A case cut short by Stop was not tested, so it is neither a pass nor a failure.
+        status: !c.steps.length || (cut && !failedStep) ? 'skipped' : failedStep?.environment ? 'blocked' : failedStep ? 'failed' : 'passed',
         confidence: mean(ran.map((s) => s.confidence)), understanding: mean(steps.map((s) => s.parseConfidence)),
         assumed: c.basis === 'assumed' || undefined,
-        advice: failedStep ? adviceFor(failedStep, c.basis === 'assumed') : undefined,
+        advice: failedStep ? adviceFor(failedStep, c.basis === 'assumed') : cut ? 'Stopped by you before this case finished.' : undefined,
       });
       live[k] = results[results.length - 1];
+      if (opts.stopOnFail && failedStep && !failedStep.environment && !stopped) {
+        stopped = `Not run: testing stopped after ${c.id} failed, as you asked.`;
+        log(`\n■ Stopping after the first failure (${c.id}), as asked.`);
+      }
       publish();
     }
   } finally {
     await browser.close().catch(() => undefined);
   }
 
-  writeResults(opts.healDir, results, shotAt ? { live: 'live.png', liveAt: shotAt } : {});
+  if (stopped) log(`\n■ ${stopped}`);
+  writeResults(opts.healDir, results, { ...(shotAt ? { live: 'live.png', liveAt: shotAt } : {}), ...(stopped ? { stopped } : {}) });
   return { results, passed: results.every((r) => r.status === 'passed' || r.status === 'skipped') };
 }
 
@@ -299,7 +322,7 @@ function writeProgress(dir: string, data: unknown) {
   }
 }
 
-function writeResults(dir: string, results: CaseResult[], extra: { live?: string; liveAt?: number } = {}) {
+function writeResults(dir: string, results: CaseResult[], extra: { live?: string; liveAt?: number; stopped?: string } = {}) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, 'results.json'),

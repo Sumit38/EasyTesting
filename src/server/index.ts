@@ -12,6 +12,7 @@ import { writeXlsx } from './xlsx.js';
 import { randomBytes } from 'node:crypto';
 import { Auth, AuthError, clearCookie, cookie, COOKIE, sessionCookie, type User } from './auth.js';
 import { blockedReason } from '../exec/guard.js';
+import { decodeText } from '../cases/decode.js';
 import { DEMO_TEST_DATA, DEMO_USE_CASE, demoPage } from './demo.js';
 import { RunManager, type Framework } from './runs.js';
 
@@ -59,6 +60,17 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
     if (recent.length >= AI_PER_HOUR) throw httpError(429, `You have used the AI helper ${AI_PER_HOUR} times in the last hour. Try again later, or use the standard generator.`);
     aiUses.set(userId, [...recent, Date.now()]);
   };
+  /** Whether automatic mode may call the AI for this person now, without refusing the request when it may not. */
+  const aiFree = (userId: number) => aiConfigured() && (aiUses.get(userId) ?? []).filter((t) => Date.now() - t < 3_600_000).length < AI_PER_HOUR;
+  /** Writes test cases: 'auto' (the default) reads with the built-in reader and asks the AI only when that reading is poor. */
+  const writeCases = async (text: string, userId: number, chosen: unknown, extra: { startPage?: string; testData?: Record<string, string> } = {}) => {
+    const method = chosen === 'ai' || chosen === 'rules' ? chosen : 'auto';
+    if (method === 'ai' && aiConfigured()) aiAllowed(userId);
+    const out = await generate(text, { ...extra, method, allowAi: aiFree(userId) });
+    if (method === 'auto' && out.by === 'ai') aiAllowed(userId);
+    return out;
+  };
+  const generated = (out: Awaited<ReturnType<typeof generate>>) => ({ notes: out.notes, by: out.by, fallbackReason: out.fallbackReason, switched: out.switched, analysis: out.analysis });
   /** Starting a run: one person cannot fill the queue, and the address must be one this server may test. */
   const mayRun = async (owner: number | undefined, appUrl?: string) => {
     if (owner && runs.busyFor(owner) >= runs.maxPerUser) throw httpError(429, `You already have ${runs.maxPerUser} runs waiting or running. Wait for one to finish, or stop one.`);
@@ -229,19 +241,18 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
         }
       }
       if (/\.(docx?|pdf)$/i.test(filename)) throw httpError(400, 'Word and PDF files cannot be read here yet. Copy the text and paste it into the box.');
-      return json(res, 200, { text: data.toString('utf8').replace(/^\uFEFF/, '') });
+      return json(res, 200, { text: decodeText(new Uint8Array(data)) });
     }
 
     if (path === '/api/usecases/generate' && method === 'POST') {
-      const b = await json_<{ title?: string; text?: string; method?: 'rules' | 'ai'; startPage?: string; testData?: unknown; appUrl?: string }>(300_000);
+      const b = await json_<{ title?: string; text?: string; method?: 'rules' | 'ai' | 'auto'; startPage?: string; testData?: unknown; appUrl?: string }>(300_000);
       const text = String(b.text ?? '').trim();
       if (text.length < 20) throw httpError(400, 'Paste or upload a use case first. It needs at least a few sentences.');
       if (text.length > 60_000) throw httpError(413, 'That use case is too long. Split it into several use cases.');
-      if (b.method === 'ai' && aiConfigured()) aiAllowed(me.id);
-      const out = await generate(text, { method: b.method === 'ai' ? 'ai' : 'rules', startPage: b.startPage?.trim() || undefined, testData: parseTestData(b.testData) });
+      const out = await writeCases(text, me.id, b.method, { startPage: b.startPage?.trim() || undefined, testData: parseTestData(b.testData) });
       const title = (b.title?.trim() || out.useCase.title || 'Generated test cases').slice(0, 120);
       const sv = suites.create(me.id, { title, source: 'generated', usecaseId: suites_useCase(me.id, title, text), appUrl: String(b.appUrl ?? '').trim(), cases: out.cases });
-      return json(res, 201, { suite: suiteView(sv), notes: out.notes, by: out.by, fallbackReason: out.fallbackReason });
+      return json(res, 201, { suite: suiteView(sv), ...generated(out) });
     }
 
     if (path === '/api/suites' && method === 'GET') return json(res, 200, suites.list(isAdmin ? undefined : me.id).map((x) => ({ id: x.id, title: x.title, source: x.source, cases: x.cases.length, appUrl: x.appUrl, updatedAt: x.updatedAt })));
@@ -260,11 +271,10 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
         // Writes the cases again from the same use case, with the current generator. Edits made since are replaced.
         const uc = sv.usecaseId ? suites.getUseCase(sv.usecaseId) : undefined;
         if (!uc) throw httpError(409, 'This set was uploaded, not generated from a use case, so it cannot be rebuilt. Use "Fix the gaps" instead.');
-        const b = await json_<{ method?: 'rules' | 'ai' }>(10_000);
-        if (b.method === 'ai' && aiConfigured()) aiAllowed(me.id);
-        const out = await generate(uc.body, { method: b.method === 'ai' ? 'ai' : 'rules' });
+        const b = await json_<{ method?: 'rules' | 'ai' | 'auto' }>(10_000);
+        const out = await writeCases(uc.body, me.id, b.method);
         const updated = suites.update(sv.id, { cases: out.cases });
-        return json(res, 200, { suite: suiteView(updated!), notes: out.notes, by: out.by, fallbackReason: out.fallbackReason });
+        return json(res, 200, { suite: suiteView(updated!), ...generated(out) });
       }
       if (action === 'download' && method === 'GET') {
         const format = url.searchParams.get('format') === 'csv' ? 'csv' : 'xlsx';
@@ -278,14 +288,14 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
         return res.end(Buffer.from(writeXlsx(rows, 'Test cases', COLUMN_WIDTHS)));
       }
       if (action === 'run' && method === 'POST') {
-        const b = await json_<{ appUrl?: string }>(10_000);
+        const b = await json_<{ appUrl?: string; stopOnFail?: boolean }>(10_000);
         const appUrl = String(b.appUrl ?? sv.appUrl).trim();
         if (!/^https?:\/\/\S+$/i.test(appUrl)) throw httpError(400, 'Enter the app link, starting with http:// or https://');
         const runnable = sv.cases.filter((c) => c.steps.length);
         if (!runnable.length) throw httpError(400, 'None of these test cases has any steps to run.');
         await mayRun(owner, appUrl);
         if (appUrl !== sv.appUrl) suites.update(sv.id, { appUrl });
-        return json(res, 202, runs.createCases({ title: sv.title, appUrl, cases: sv.cases, owner, suite: sv.id }));
+        return json(res, 202, runs.createCases({ title: sv.title, appUrl, cases: sv.cases, owner, suite: sv.id, stopOnFail: !!b.stopOnFail }));
       }
     }
 

@@ -262,6 +262,7 @@
   .suite-head input.title:hover, .suite-head input.title:focus { border-color: var(--line); background: var(--panel); }
   .runbox { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 14px 0; box-shadow: var(--shadow); }
   .runbox label { flex: 1; min-width: 260px; }
+  .runbox .runside { display: grid; gap: 8px; justify-items: start; } .runbox .runside label.check { flex: none; min-width: 0; font-size: 13px; color: var(--muted); }
   .case { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 10px; box-shadow: var(--shadow); }
   .case > summary { list-style: none; cursor: pointer; padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
   .case > summary::-webkit-details-marker { display: none; } .case > summary::before { content: '▸'; color: var(--muted); } .case[open] > summary::before { content: '▾'; }
@@ -283,6 +284,8 @@
   .stepres .sub { grid-column: 2 / 4; font-size: 12px; color: var(--muted); } .stepres .err { grid-column: 2 / 4; color: var(--bad); font-size: 13px; margin: 0; min-height: 0; }
   .gaps { background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--warn); border-radius: 14px; box-shadow: var(--shadow); padding: 16px 20px; margin-top: 16px; display: grid; gap: 12px; }
   .gapstitle h3 { margin: 0 0 2px; }
+  .analysis { background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--brand); border-radius: 14px; box-shadow: var(--shadow); padding: 14px 20px; margin-top: 12px; }
+  .analysis h3 { margin: 0; } .analysis p { margin: 6px 0 8px; } .analysis ul { margin: 8px 0 0; padding-left: 20px; color: var(--muted); font-size: 13.5px; display: grid; gap: 4px; }
   .gap { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; min-width: 0; }
   .gaphead { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; } .gaphead b { overflow-wrap: anywhere; min-width: 0; }
   .gapq { font-size: 13.5px; font-weight: 600; color: var(--text); }
@@ -303,6 +306,9 @@
   .segs { display: flex; gap: 3px; height: 12px; margin: 4px 0 10px; }
   .segs span { flex: 1; border-radius: 3px; background: var(--line); min-width: 3px; }
   .segs .passed { background: var(--ok); } .segs .failed { background: var(--bad); } .segs .blocked { background: var(--warn); } .segs .skipped { background: var(--muted); opacity: .45; } .segs .running { background: var(--info); animation: pulse 1.2s infinite; }
+  .proghead { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: flex-start; justify-content: space-between; } .proghead > div { min-width: 0; }
+  .stopbtn { flex: none; }
+  .prog.done-stop { border-left: 5px solid var(--warn); }
   .counts { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 14px; } .counts b { font-size: 16px; }
   .counts .ok { color: var(--ok); } .counts .bad { color: var(--bad); } .counts .warn { color: var(--warn); } .counts .mute { color: var(--muted); }
   .livebox { margin: 0; } .livebox img { width: 100%; border: 1px solid var(--line); border-radius: 10px; display: block; background: var(--panel-2); aspect-ratio: 16 / 10; object-fit: cover; object-position: top; }
@@ -526,7 +532,7 @@ function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.rem
 
 const STATUS = {
   queued: ['Queued', 'info live'], installing: ['Installing packages', 'info live'], running: ['Testing', 'info live'],
-  passed: ['Passed', 'ok'], failed: ['Tests failed', 'bad'], error: ['Could not run', 'bad'], timeout: ['Timed out', 'bad'],
+  passed: ['Passed', 'ok'], failed: ['Tests failed', 'bad'], error: ['Could not run', 'bad'], timeout: ['Timed out', 'bad'], stopped: ['Stopped', 'warn'],
 };
 function statusBadge(s) { const [t, c] = STATUS[s] || [s, 'mute']; return el('span', { class: 'badge b-' + c, text: t }); }
 

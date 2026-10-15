@@ -222,3 +222,26 @@ describe('use cases written as real documents', () => {
     assert.deepEqual(steps(doc), ['Open the application', 'Search for "red shoes"', 'Press Enter', 'Verify the matching products are displayed', 'Click the "Add to cart" button', 'Click the "Checkout" button', 'Click the "Place order" button', 'Verify "Thank you for your order" is displayed']);
   });
 });
+
+describe('use case files saved in any encoding', () => {
+  it('reads UTF-8, UTF-8 with a mark, UTF-16 (Notepad "Unicode") and old Windows text', async () => {
+    const { decodeText } = await import('../src/cases/decode.js');
+    const words = 'Main Flow:\r\n1. The user clicks “Sign in”\r\n';
+    const utf16 = new Uint8Array([0xff, 0xfe, ...[...words].flatMap((ch) => { const c = ch.charCodeAt(0); return [c & 0xff, c >> 8]; })]);
+    const cp1252 = new Uint8Array([...'Main Flow:\r\n1. The user clicks '].map((c) => c.charCodeAt(0)).concat([0x93, ...[...'Sign in'].map((c) => c.charCodeAt(0)), 0x94, 13, 10]));
+    const want = 'Main Flow:\n1. The user clicks “Sign in”\n';
+    assert.equal(decodeText(new TextEncoder().encode(words)), want);
+    assert.equal(decodeText(new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode(words)])), want);
+    assert.equal(decodeText(utf16), want);
+    assert.equal(decodeText(cp1252), want);
+    assert.deepEqual(generateCases(decodeText(utf16)).cases[0].steps, ['Open the application', 'Click "Sign in"']);
+  });
+
+  it('reads tab-separated tables and steps typed on one line', () => {
+    const tabbed = 'Use Case Name\tCheckout\nPrimary Actor\tCustomer\nStep\tActor\tAction\n1\tCustomer\tOpens the shop\n2\tCustomer\tAdds the product to the cart\n3\tSystem\tDisplays "Added to cart"';
+    assert.deepEqual(generateCases(tabbed).cases[0].steps, ['Open the application', 'Click the "Add to cart" button', 'Verify "Added to cart" is displayed']);
+    assert.equal(generateCases(tabbed).useCase.title, 'Checkout');
+    const oneLine = 'Main Flow: 1. The user opens the shop. 2. The user clicks Checkout. 3. The system displays "Pay now".';
+    assert.deepEqual(generateCases(oneLine).cases[0].steps, ['Open the application', 'Click "Checkout"', 'Verify "Pay now" is displayed']);
+  });
+});
