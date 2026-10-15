@@ -722,7 +722,15 @@
 
     // The headline: what is happening now, or how it went, in one sentence.
     let title, now, tone;
-    if (!cases.length) {
+    if (run.status === 'queued') {
+      title = 'Waiting to start';
+      now = 'Other test runs are using the server. This one starts by itself as soon as one finishes. You can stop it now and it will not run.';
+      tone = 'going';
+    } else if (!cases.length && run.status === 'stopped') {
+      title = 'Stopped before it started';
+      now = 'You stopped this run while it was waiting, so no test case was run and nothing was counted. Run it again whenever you like.';
+      tone = 'done-stop';
+    } else if (!cases.length) {
       title = active ? 'Getting ready…' : 'No results'; now = active ? 'Starting the browser and opening your app.' : 'The run stopped before any test case started. Open the technical log below to see why.'; tone = active ? 'going' : 'done-bad';
     } else if (run.status === 'stopped' || (!active && data.stopped && /by you/.test(data.stopped))) {
       title = `Stopped: ${passed} passed, ${failed} failed, ${notRun} not run`;
