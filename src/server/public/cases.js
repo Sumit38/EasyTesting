@@ -266,7 +266,7 @@
       confirmBtn.disabled = missing;
     };
     const mapGrid = el('div', { class: 'mapgrid' }, ...imp.fields.map((f) => {
-      const sel = el('select', {}, el('option', { value: -1, text: '(none) — my file has no such column' }), ...imp.header.map((h, i) => el('option', { value: i, text: `${String.fromCharCode(65 + (i % 26))}: ${h || '(blank)'}`, selected: imp.mapping[f] === i })));
+      const sel = el('select', {}, el('option', { value: -1, text: '(none)' }), ...imp.header.map((h, i) => el('option', { value: i, text: `${String.fromCharCode(65 + (i % 26))}: ${h || '(blank)'}`, selected: imp.mapping[f] === i })));
       sel.setAttribute('aria-label', FIELD_LABEL[f]);
       selects[f] = sel;
       const sample = el('div', { class: 'mapsample' });
