@@ -303,14 +303,14 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
         return res.end(Buffer.from(writeXlsx(rows, 'Test cases', COLUMN_WIDTHS)));
       }
       if (action === 'run' && method === 'POST') {
-        const b = await json_<{ appUrl?: string; stopOnFail?: boolean }>(10_000);
+        const b = await json_<{ appUrl?: string; stopOnFail?: boolean; speed?: string }>(10_000);
         const appUrl = String(b.appUrl ?? sv.appUrl).trim();
         if (!/^https?:\/\/\S+$/i.test(appUrl)) throw httpError(400, 'Enter the app link, starting with http:// or https://');
         const runnable = sv.cases.filter((c) => c.steps.length);
         if (!runnable.length) throw httpError(400, 'None of these test cases has any steps to run.');
         await mayRun(owner, appUrl);
         if (appUrl !== sv.appUrl) suites.update(sv.id, { appUrl });
-        return json(res, 202, runs.createCases({ title: sv.title, appUrl, cases: sv.cases, owner, suite: sv.id, stopOnFail: !!b.stopOnFail }));
+        return json(res, 202, runs.createCases({ title: sv.title, appUrl, cases: sv.cases, owner, suite: sv.id, stopOnFail: !!b.stopOnFail, speed: b.speed === 'slow' || b.speed === 'very-slow' ? b.speed : 'normal' }));
       }
     }
 

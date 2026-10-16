@@ -20,8 +20,10 @@ export interface RunOptions {
   healDir: string;
   storeFile: string;
   headless?: boolean;
-  /** How long a step may look for its element or its expected result. */
+  /** How long a step may look for its element or its expected result. Default 15 s. */
   stepTimeout?: number;
+  /** How long a page may take to open before the case is reported as blocked. Default 45 s. */
+  pageTimeout?: number;
   /** Refuse any address that is not on the public internet (this machine, private networks, files). On for shared servers. */
   blockPrivate?: boolean;
   /** A file whose appearance means "stop": the current step finishes, the rest is reported as not run. */
@@ -89,25 +91,92 @@ const hashId = (s: string) => createHash('sha1').update(s).digest('hex').slice(0
 const describeNode = (n: UINode) => `${n.role !== 'generic' ? n.role + ' ' : ''}"${n.name || n.text || n.tag}"`;
 
 /** Opens a page, trying twice: busy public sites are sometimes slow once. A page that still will not load is reported as a site or network problem, not a failure of the app. */
-async function gotoWithRetry(page: Page, url: string): Promise<void> {
+async function gotoWithRetry(page: Page, url: string, timeout = 45_000): Promise<void> {
   let last: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
+      await settlePage(page, Math.min(timeout, 15_000));
       return;
     } catch (e) {
       last = e;
-      await sleep(1000);
+      await sleep(2000);
     }
   }
-  throw new StepError(`The page ${url} did not load: ${(last as Error).message.split('\n')[0]}`, undefined, 'environment');
+  throw new StepError(`The page ${url} did not load within ${Math.round(timeout / 1000)} seconds, twice: ${(last as Error).message.split('\n')[0]}`, undefined, 'environment');
+}
+
+/**
+ * Waits for the page to be ready after something that may load or change it: the document, then the page's own load event, then
+ * a quiet network, then a quiet page (nothing being added or moved). Each wait is capped, so a page that keeps polling or shows
+ * endless animations only costs a few seconds, never the whole run.
+ */
+export async function settlePage(page: Page, budget = 15_000): Promise<void> {
+  const end = Date.now() + budget;
+  const left = (cap: number) => Math.max(0, Math.min(cap, end - Date.now()));
+  await page.waitForLoadState('domcontentloaded', { timeout: left(budget) }).catch(() => undefined);
+  await page.waitForLoadState('load', { timeout: left(6000) }).catch(() => undefined);
+  await page.waitForLoadState('networkidle', { timeout: left(1500) }).catch(() => undefined);
+  await page.evaluate((max) => new Promise<void>((done) => {
+    // Quiet for 300 ms: no element added, removed or changed.
+    let timer = setTimeout(finish, 300);
+    const stop = setTimeout(finish, max);
+    const watch = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(finish, 300); });
+    function finish() { watch.disconnect(); clearTimeout(timer); clearTimeout(stop); done(); }
+    watch.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+  }), left(2500)).catch(() => undefined);
+}
+
+/**
+ * Does something that may open another page (a click, Enter in a form) and, if it does, waits for that page with the page time
+ * limit rather than the step's: the click itself is over at once, however slow the server is to answer.
+ */
+async function andFollow(page: Page, act: () => Promise<unknown>, pageTimeout: number): Promise<void> {
+  const nav = page.waitForEvent('request', { predicate: (q) => q.isNavigationRequest() && q.frame() === page.mainFrame(), timeout: 1500 }).catch(() => undefined);
+  await act();
+  const req = await nav;
+  if (!req) return;
+  const answered = await Promise.race([req.response().then(() => true).catch(() => true), sleep(pageTimeout).then(() => false)]);
+  if (!answered) throw new StepError(`The next page did not answer within ${Math.round(pageTimeout / 1000)} seconds.`, undefined, 'environment');
+  await page.waitForLoadState('domcontentloaded', { timeout: pageTimeout }).catch(() => undefined);
+}
+
+/** Something a person would see in the window: text, a picture, a drawing, a video or a form control. */
+const HAS_CONTENT_JS = `(() => {
+  const vw = innerWidth, vh = innerHeight;
+  const seen = (el) => { const r = el.getBoundingClientRect(); if (r.width < 4 || r.height < 4 || r.bottom < 0 || r.right < 0 || r.top > vh || r.left > vw) return false; const s = getComputedStyle(el); return s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.05; };
+  if (!document.body || document.readyState === 'loading') return false;
+  for (const el of document.querySelectorAll('img,svg,canvas,video,input,button,select,textarea,iframe')) if (seen(el) && (el.tagName !== 'IMG' || (el.complete && el.naturalWidth > 0))) return true;
+  const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(), k = 0; n && k < 4000; n = walk.nextNode(), k++) if (n.textContent.trim() && n.parentElement && seen(n.parentElement)) return true;
+  return false;
+})()`;
+
+/**
+ * A picture of the page, only once it shows something: waits for content, fonts and two painted frames, then checks the picture
+ * is not a single flat colour. Gives up after `wait` and returns undefined rather than keep a blank picture.
+ */
+async function pictureOf(page: Page, wait = 6000, type: 'jpeg' | 'png' = 'jpeg'): Promise<Buffer | undefined> {
+  const end = Date.now() + wait;
+  for (let attempt = 0; ; attempt++) {
+    const ready = await page.evaluate(HAS_CONTENT_JS).catch(() => false);
+    if (ready) {
+      await page.evaluate(() => Promise.race([document.fonts?.ready, new Promise((r) => setTimeout(r, 1500))])).catch(() => undefined);
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))).catch(() => undefined);
+      const shot = await page.screenshot({ type, ...(type === 'jpeg' ? { quality: 70 } : {}), timeout: 5000 }).catch(() => undefined);
+      // A flat picture (white, black or one colour) compresses to almost nothing; real pages do not.
+      if (shot && shot.length > (type === 'jpeg' ? 6900 : 9000)) return shot;
+    }
+    if (Date.now() >= end) return undefined;
+    await sleep(attempt < 3 ? 400 : 800);
+  }
 }
 
 /** Opens a page, after checking the address is one this server allows. */
 async function openPage(page: Page, url: string, ctx: Ctx): Promise<void> {
   const why = ctx.blockPrivate ? await blockedReason(url) : /^https?:/i.test(url) ? undefined : `Only http:// and https:// addresses can be tested, not ${url.split(':')[0]}:`;
   if (why) throw new StepError(why, undefined, 'environment');
-  await gotoWithRetry(page, url);
+  await gotoWithRetry(page, url, ctx.pageTimeout);
 }
 
 /** The first browser Playwright can start here: Chrome, Edge, then its own Chromium. */
@@ -148,7 +217,8 @@ async function stableSelector(page: Page, probe: ReturnType<typeof playwrightPro
 export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[]; passed: boolean }> {
   const log = opts.log ?? (() => undefined);
   const shown = (t: string) => (t.length > 110 ? t.slice(0, 107) + '...' : t);
-  const timeout = opts.stepTimeout ?? 8000;
+  const timeout = opts.stepTimeout ?? 15_000;
+  const pageTimeout = opts.pageTimeout ?? 45_000;
   mkdirSync(join(opts.healDir, 'shots'), { recursive: true });
   const healer = new AutoHealer({ dir: opts.healDir, storeFile: opts.storeFile, lookupTimeout: 300 });
   const index = new FingerprintStore(opts.storeFile); // step -> the selector that worked last time
@@ -166,17 +236,18 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
   let shotAt = 0;
   let lastShot: string | undefined; // the newest picture of the page, shown live on the run screen
   const publish = (current?: { case: number; step: number }) => writeProgress(opts.healDir, { cases: live, running: true, current, live: lastShot, liveAt: shotAt || undefined });
-  /** Keeps a picture of the page after a step that worked. JPEG, so a run of a hundred steps stays a few megabytes. */
+  /** Keeps a picture of the page after a step that worked. JPEG, so a run of a hundred steps stays a few megabytes. Never a blank one. */
   const snapStep = async (page: Page, caseId: string, step: number, r: StepResult) => {
     const file = `${caseId}-step${step}-ok.jpg`.replace(/[^\w.-]/g, '_');
-    try {
-      await page.screenshot({ path: join(opts.healDir, 'shots', file), type: 'jpeg', quality: 70, timeout: 3000 });
-      r.evidence = file;
-      lastShot = file;
-      shotAt = Date.now();
-    } catch {
-      /* no picture this time */
+    const shot = await pictureOf(page);
+    if (!shot) {
+      r.notes.push('No picture was kept: the page still showed nothing after waiting a few seconds.');
+      return;
     }
+    writeFileSync(join(opts.healDir, 'shots', file), shot);
+    r.evidence = file;
+    lastShot = file;
+    shotAt = Date.now();
   };
   publish();
   let stopped: string | undefined; // why the remaining cases were not run
@@ -204,6 +275,7 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
       const page = await context.newPage();
       page.on('dialog', (d) => void d.accept().catch(() => undefined));
       healer.setTest(label);
+      let near: UINode | undefined; // the element the previous step used, to prefer its form when names tie
       const steps: StepResult[] = [];
       let failed = false;
       let cut = false; // stopped part-way through this case
@@ -244,7 +316,11 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
           continue;
         }
         try {
-          await doStep(page, parsed, { base, appUrl: opts.appUrl, blockPrivate: !!opts.blockPrivate, healer, index, coverage, key: `step::${c.id}::${i}::${norm(parsed.target ?? '')}`, timeout, r });
+          await doStep(page, parsed, {
+            base, appUrl: opts.appUrl, blockPrivate: !!opts.blockPrivate, healer, index, coverage, timeout, pageTimeout, r, near, onElement: (n) => (near = n),
+            // v2: steps learned before names were ranked with the page's reading order must be found again by name once.
+            key: `step::v2::${c.id}::${i}::${norm(parsed.target ?? '')}`,
+          });
           r.status = 'passed';
           r.confidence = Math.min(parsed.confidence, r.resolveConfidence);
           log(`  ✔ ${i + 1}. ${shown(text)}${r.via && r.via !== 'saved' ? `  [${r.via}]` : ''}  (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
@@ -259,10 +335,13 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
           r.confidence = Math.min(parsed.confidence, r.resolveConfidence);
           try {
             const file = `${c.id}-step${i + 1}.png`.replace(/[^\w.-]/g, '_');
-            await page.screenshot({ path: join(opts.healDir, 'shots', file) });
-            r.screenshot = file;
-            lastShot = file;
-            shotAt = Date.now();
+            const shot = await pictureOf(page, 4000, 'png');
+            if (shot) {
+              writeFileSync(join(opts.healDir, 'shots', file), shot);
+              r.screenshot = file;
+              lastShot = file;
+              shotAt = Date.now();
+            } else r.notes.push('No picture of the failure was kept: the page showed nothing.');
           } catch {
             /* the page may be gone */
           }
@@ -356,7 +435,11 @@ interface Ctx {
   coverage: CoverageRecorder;
   key: string;
   timeout: number;
+  pageTimeout: number;
   r: StepResult;
+  /** The element the previous step of this case used. */
+  near?: UINode;
+  onElement?: (node: UINode) => void;
   /** The locator a healed step now uses, so the step can be confirmed or failed once it has run. */
   healedSelector?: string;
 }
@@ -403,7 +486,7 @@ async function locate(page: Page, p: ParsedStep, ctx: Ctx, mode: 'act' | 'see'):
   let snap: Snapshot | undefined;
   do {
     snap = await snapshot(page);
-    ranked = rank(snap.nodes, target, hint, mode);
+    ranked = rank(snap.nodes, target, hint, mode, ctx.near);
     if (ranked.best && ranked.best.score >= 0.6) break;
     await sleep(250);
   } while (Date.now() < deadline);
@@ -457,6 +540,7 @@ async function remember(page: Page, ctx: Ctx, selector: string) {
   try {
     const node = await probe.describe(selector);
     if (!node) return;
+    ctx.onElement?.(node);
     const fp: Fingerprint = { node, viewport: await probe.viewport(), selector };
     ctx.index.set(ctx.key, fp);
     await ctx.healer.remember(probe, selector);
@@ -523,10 +607,8 @@ const KINDS: Record<string, RegExp> = {
 async function doStep(page: Page, p: ParsedStep, ctx: Ctx): Promise<void> {
   const { r, base } = ctx;
   const t = ctx.timeout;
-  const settle = async () => {
-    await page.waitForLoadState('domcontentloaded', { timeout: 1500 }).catch(() => undefined);
-    await sleep(120);
-  };
+  // After anything that may load or change the page: wait for it to be ready, however slow the site.
+  const settle = () => settlePage(page, Math.min(ctx.pageTimeout, 20_000));
 
   switch (p.action) {
     case 'open': {
@@ -541,7 +623,7 @@ async function doStep(page: Page, p: ParsedStep, ctx: Ctx): Promise<void> {
           const m = rank(snap.nodes, p.target, 'link', 'act');
           if (m.best && m.best.score >= 0.85) {
             const sel = (await stableSelector(page, playwrightProbe(page, 300), m.best.node)) ?? m.best.node.cssPath;
-            await page.locator(sel).first().click({ timeout: t });
+            await andFollow(page, () => page.locator(sel).first().click({ timeout: t, noWaitAfter: true }), ctx.pageTimeout);
             await settle();
             r.matchedAs = describeNode(m.best.node);
           } else r.notes.push(`No link called "${p.target}" was found, so the page the app link opened was used.`);
@@ -551,16 +633,18 @@ async function doStep(page: Page, p: ParsedStep, ctx: Ctx): Promise<void> {
       return;
     }
     case 'refresh':
-      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: ctx.pageTimeout });
+      await settle();
       return;
     case 'back':
-      await page.goBack({ waitUntil: 'domcontentloaded' });
+      await page.goBack({ waitUntil: 'domcontentloaded', timeout: ctx.pageTimeout });
+      await settle();
       return;
     case 'wait':
       await sleep(Number(p.value) || 1000);
       return;
     case 'press':
-      await page.keyboard.press(p.value ?? 'Enter');
+      await andFollow(page, () => page.keyboard.press(p.value ?? 'Enter'), ctx.pageTimeout);
       await settle();
       return;
     case 'scroll': {
@@ -579,7 +663,7 @@ async function doStep(page: Page, p: ParsedStep, ctx: Ctx): Promise<void> {
     await remember(page, ctx, ctx.healedSelector ?? r.selector!);
     try {
       if (p.action === 'click') {
-        await el.click({ timeout: t });
+        await andFollow(page, () => el.click({ timeout: t, noWaitAfter: true }), ctx.pageTimeout);
         await settle();
       } else if (p.action === 'hover') await el.hover({ timeout: t });
       else if (p.action === 'type') {

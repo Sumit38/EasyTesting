@@ -16,6 +16,8 @@ import { applyInDir, loadRecords } from '../apply.js';
 import type { HealRecord } from '../core.js';
 
 export type Framework = 'playwright' | 'selenium' | 'custom';
+/** How long a test-case run waits for the site: Normal 15 s per step, Slow 30 s, Very slow 60 s. */
+export type Speed = 'normal' | 'slow' | 'very-slow';
 export type RunStatus = 'queued' | 'installing' | 'running' | 'passed' | 'failed' | 'error' | 'timeout' | 'stopped';
 
 export interface Run {
@@ -128,7 +130,8 @@ export class RunManager {
 
   constructor(opts: RunManagerOptions) {
     this.dir = resolve(opts.dataDir);
-    this.timeoutMs = opts.timeoutMs ?? 15 * 60_000;
+    // Slow sites with many cases take a while; a run that is truly stuck is still ended.
+    this.timeoutMs = opts.timeoutMs ?? 45 * 60_000;
     this.maxConcurrent = Math.max(1, opts.maxConcurrent ?? (Number(process.env.HEAL_MAX_RUNS) || 3));
     this.blockPrivate = !!opts.blockPrivateTargets;
     this.maxPerUser = Math.max(1, opts.maxPerUser ?? (Number(process.env.HEAL_MAX_USER_RUNS) || 3));
@@ -269,7 +272,7 @@ export class RunManager {
   }
 
   /** Starts a run of plain-English test cases with the built-in executor. */
-  createCases(input: { title: string; appUrl: string; cases: import('../cases/model.js').TestCase[]; owner?: number; suite?: number; stopOnFail?: boolean }): Run {
+  createCases(input: { title: string; appUrl: string; cases: import('../cases/model.js').TestCase[]; owner?: number; suite?: number; stopOnFail?: boolean; speed?: Speed }): Run {
     const id = randomBytes(6).toString('hex');
     const run: Run = {
       id, name: input.title, framework: 'custom', appUrl: input.appUrl, command: 'Built-in test-case runner', install: false, status: 'queued',
@@ -277,7 +280,7 @@ export class RunManager {
     };
     mkdirSync(this.projectDir(id), { recursive: true });
     mkdirSync(this.healDir(id), { recursive: true });
-    writeFileSync(join(this.projectDir(id), 'cases.json'), JSON.stringify({ title: input.title, appUrl: input.appUrl, cases: input.cases, stopOnFail: !!input.stopOnFail }, null, 2));
+    writeFileSync(join(this.projectDir(id), 'cases.json'), JSON.stringify({ title: input.title, appUrl: input.appUrl, cases: input.cases, stopOnFail: !!input.stopOnFail, speed: input.speed ?? 'normal' }, null, 2));
     this.save(run);
     this.launch(run);
     return run;
@@ -322,8 +325,8 @@ export class RunManager {
     if (!old) return undefined;
     if (old.demo) return this.createDemo(old.appUrl, old.demo, old.owner);
     if (old.kind === 'cases') {
-      const saved = JSON.parse(readFileSync(join(this.projectDir(id), 'cases.json'), 'utf8')) as { title: string; cases: import('../cases/model.js').TestCase[]; stopOnFail?: boolean };
-      return this.createCases({ title: old.name, appUrl: old.appUrl, cases: saved.cases, owner: old.owner, suite: old.suite, stopOnFail: saved.stopOnFail });
+      const saved = JSON.parse(readFileSync(join(this.projectDir(id), 'cases.json'), 'utf8')) as { title: string; cases: import('../cases/model.js').TestCase[]; stopOnFail?: boolean; speed?: Speed };
+      return this.createCases({ title: old.name, appUrl: old.appUrl, cases: saved.cases, owner: old.owner, suite: old.suite, stopOnFail: saved.stopOnFail, speed: saved.speed });
     }
     const nid = randomBytes(6).toString('hex');
     const run: Run = { ...old, id: nid, status: 'queued', createdAt: new Date().toISOString(), finishedAt: undefined, exitCode: undefined };

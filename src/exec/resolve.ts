@@ -109,13 +109,17 @@ function labelsOf(n: UINode): [string, string, number][] {
  * Ranks the elements of a page against a phrase. `mode` is 'act' when the step will click or type (prefer controls)
  * and 'see' when it only needs to find something on the page (any element, smallest first).
  */
-export function rank(nodes: UINode[], target: string, hint: string | undefined, mode: 'act' | 'see' = 'act'): Ranked {
+export function rank(nodes: UINode[], target: string, hint: string | undefined, mode: 'act' | 'see' = 'act', near?: UINode): Ranked {
   const scored: Match[] = [];
+  const plain = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  const wanted = plain(target);
   for (const node of nodes) {
     let best = 0;
     let via = '';
     for (const [label, source, weight] of labelsOf(node)) {
-      const s = similarity(target, label) * weight;
+      // The very same words, small ones included, beat a match that only holds once "your" or "the" are ignored:
+      // "Email Address" is the login field, not the newsletter's "Your email address".
+      const s = similarity(target, label) * weight + (plain(label) === wanted ? 0.02 : 0);
       if (s > best) {
         best = s;
         via = source;
@@ -125,8 +129,21 @@ export function rank(nodes: UINode[], target: string, hint: string | undefined, 
     const score = best * fit(node, hint, mode);
     if (score > 0.3) scored.push({ node, score, via });
   }
-  // Higher score first; on a tie the smaller element wins (the text, not the page section around it).
-  scored.sort((a, b) => b.score - a.score || a.node.rect.w * a.node.rect.h - b.node.rect.w * b.node.rect.h);
+  // Higher score first. On a tie: the text rather than the page section around it; then the element in the same form or
+  // section as the previous step's; then the one a person reads first (top to bottom, left to right).
+  const closeness = (n: UINode) => {
+    if (!near) return 0;
+    const a = n.cssPath.split(' '), b = near.cssPath.split(' ');
+    let k = 0;
+    while (k < a.length && k < b.length && a[k] === b[k]) k++;
+    return k;
+  };
+  scored.sort((a, b) => {
+    if (Math.abs(a.score - b.score) > 0.005) return b.score - a.score;
+    if (contains(a.node, b.node)) return 1;
+    if (contains(b.node, a.node)) return -1;
+    return closeness(b.node) - closeness(a.node) || a.node.rect.y - b.node.rect.y || a.node.rect.x - b.node.rect.x;
+  });
   const best = scored[0];
   if (!best) return { ambiguous: false, alternatives: [], confidence: 0 };
   const rivals = scored.filter((m) => m !== best && best.score - m.score < 0.05 && m.node.cssPath !== best.node.cssPath && !contains(best.node, m.node) && !contains(m.node, best.node));

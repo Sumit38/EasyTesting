@@ -617,6 +617,11 @@
     const stopFirst = el('input', { type: 'checkbox' });
     try { stopFirst.checked = localStorage.getItem('et-stop-first') === '1'; } catch { /* storage blocked */ }
     stopFirst.onchange = () => { try { localStorage.setItem('et-stop-first', stopFirst.checked ? '1' : '0'); } catch { /* storage blocked */ } };
+    // How long to wait for the site, remembered per test-case set: some apps are simply slow.
+    const speed = el('select', { class: 'mini', title: 'How long each step may wait for the page, an element or a message' },
+      el('option', { value: 'normal', text: 'Normal site (waits up to 15 s per step)' }), el('option', { value: 'slow', text: 'Slow site (up to 30 s per step)' }), el('option', { value: 'very-slow', text: 'Very slow site (up to 60 s per step)' }));
+    try { speed.value = localStorage.getItem('et-speed-' + s.id) || 'normal'; } catch { /* storage blocked */ }
+    speed.onchange = () => { try { localStorage.setItem('et-speed-' + s.id, speed.value); } catch { /* storage blocked */ } };
     run.onclick = async () => {
       const link = app.value.trim();
       if (!/^https?:\/\/\S+$/i.test(link)) return toast('Enter the app link first, starting with http:// or https://');
@@ -624,7 +629,7 @@
       try {
         if (S.dirty) await saveSuite();
         else if (link !== s.appUrl) await send('/suites/' + s.id, { appUrl: link }, 'PUT');
-        const r = await send(`/suites/${s.id}/run`, { appUrl: link, stopOnFail: stopFirst.checked });
+        const r = await send(`/suites/${s.id}/run`, { appUrl: link, stopOnFail: stopFirst.checked, speed: speed.value });
         location.hash = '#/run/' + r.id;
       } catch (e) { fail(e); }
       run.disabled = false;
@@ -663,7 +668,8 @@
       el('div', { class: 'tiles', id: 'suiteTiles' }),
       gapsPanel(),
       el('div', { class: 'runbox' }, field('App link to test', app, 'Where the app lives. The test cases run in a real browser against it.'),
-        el('div', { class: 'runside' }, run, el('label', { class: 'check', title: 'When one test case fails, the rest are not run. Useful when a broken page would make every later case fail too.' }, stopFirst, ' Stop at the first failed test case'))),
+        el('div', { class: 'runside' }, run, el('label', { class: 'check', title: 'When one test case fails, the rest are not run. Useful when a broken page would make every later case fail too.' }, stopFirst, ' Stop at the first failed test case'),
+          el('label', { class: 'check' }, 'Page speed: ', speed))),
       el('h3', { class: 'sec', text: 'Check how each step was read' }),
       el('p', { class: 'hint', style: 'margin:-6px 0 12px', text: 'Every step is shown with what we understood and how sure we are. Anything under 60% needs a rewrite, because we will not guess what you meant.' }),
       ...s.cases.map(caseCard),
