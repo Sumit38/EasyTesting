@@ -27,7 +27,16 @@ export interface EvidenceInput {
 }
 
 /** A name that is safe as a file or folder on Windows, macOS and Linux, and short enough for Windows paths. */
-const safe = (s: string, max: number) => s.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').replace(/[. ]+$/, '').trim().slice(0, max).trim() || 'untitled';
+const safe = (s: string, max: number) => {
+  let t = s.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (t.length > max) {
+    // Cut at a whole word when one ends reasonably close to the limit.
+    const cut = t.slice(0, max);
+    const space = cut.lastIndexOf(' ');
+    t = space > max * 0.6 ? cut.slice(0, space) : cut;
+  }
+  return t.replace(/[\s.,;:\-–]+$/, '') || 'untitled'; // Windows drops trailing dots and spaces; trailing commas look broken
+};
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const csvCell = (v: unknown) => {
   const t = String(v ?? '');
@@ -47,21 +56,23 @@ const ext = (f: string) => (f.match(/\.(png|jpe?g)$/i)?.[1] ?? 'png').toLowerCas
  * failed beside the picture from the re-test.
  */
 export function evidenceZip(input: EvidenceInput): { zip: Uint8Array; folder: string; pictures: number } {
-  const folder = safe(`EasyTesting - ${input.title} - ${stamp(input.startedAt)}`, 90);
+  // Windows allows about 260 characters for a whole path, and "Extract All" puts everything in a folder named after the zip.
+  // So: no extra folder inside the zip, and short names everywhere (zip 60, case folder 40, picture 45).
+  const folder = `EasyTesting ${safe(input.title, 30)} ${stamp(input.startedAt)}`; // 12 + 30 + 17: the date and time always fit
   const files: Zippable = {};
-  const add = (path: string, data: Uint8Array) => (files[`${folder}/${path}`] = [data, { level: 0 }]); // pictures are already compressed
+  const add = (path: string, data: Uint8Array) => (files[path] = [data, { level: 0 }]); // pictures are already compressed
   const rows: unknown[][] = [['Test case', 'Title', 'Case result', 'Step no.', 'Step', 'Step result', 'Seconds', 'Error', 'Picture']];
   const html: string[] = [];
   let pictures = 0;
 
   for (const c of input.cases) {
-    const dir = safe(`${c.id} ${c.title}`, 60);
+    const dir = safe(`${c.id} ${c.title}`, 40);
     html.push(`<section><h2><span class="b ${esc(c.status)}">${esc(c.status)}</span> ${esc(c.id)} ${esc(c.title)}</h2>${c.advice ? `<p class="adv">${esc(c.advice)}</p>` : ''}<ol>`);
     for (const st of c.steps) {
       const shot = st.screenshot ?? st.evidence;
       let picture = '';
       if (shot && existsSync(join(input.shotsDir, shot))) {
-        picture = `${dir}/${safe(`${String(st.index + 1).padStart(2, '0')} ${st.status === 'failed' ? 'FAILED' : st.status} - ${st.text}`, 70)}.${ext(shot)}`;
+        picture = `${dir}/${safe(`${String(st.index + 1).padStart(2, '0')} ${st.status === 'failed' ? 'FAILED' : st.status} - ${st.text}`, 45)}.${ext(shot)}`;
         add(picture, readFileSync(join(input.shotsDir, shot)));
         pictures++;
       }
@@ -76,13 +87,13 @@ export function evidenceZip(input: EvidenceInput): { zip: Uint8Array; folder: st
   for (const bug of input.retested) {
     const caseId = bug.test.split(' ')[0];
     const now = input.cases.find((c) => c.id === caseId);
-    const dir = `Re-test evidence/${safe(`${bug.id} ${bug.test}`, 60)}`;
+    const dir = `Re-tests/${safe(`${bug.id} ${bug.test}`, 30)}`;
     const result = bug.retest?.result === 'passed' ? 'passed' : 'failed';
     const lastPicture = (c: CaseShots | undefined) => [...(c?.steps ?? [])].reverse().map((s) => s.screenshot ?? s.evidence).find(Boolean);
     const after = lastPicture(now);
     const parts: string[] = [];
     if (after && existsSync(join(input.shotsDir, after))) {
-      const name = `${dir}/after - ${result} in run ${input.runId}.${ext(after)}`;
+      const name = `${dir}/2 after - ${result} ${input.runId.slice(0, 6)}.${ext(after)}`;
       add(name, readFileSync(join(input.shotsDir, after)));
       parts.push(`<figure><a href="${encodeURI(name)}"><img src="${encodeURI(name)}" alt="After"></a><figcaption>After: re-test ${result} (this run)</figcaption></figure>`);
       pictures++;
@@ -93,7 +104,7 @@ export function evidenceZip(input: EvidenceInput): { zip: Uint8Array; folder: st
       const old = input.earlier(runId);
       const failed = old?.cases.find((c) => c.id === caseId)?.steps.find((s) => s.status === 'failed' && s.screenshot);
       if (!old || !failed?.screenshot || !existsSync(join(old.shotsDir, failed.screenshot))) continue;
-      const name = `${dir}/before - failed in run ${runId}.${ext(failed.screenshot)}`;
+      const name = `${dir}/1 before - failed ${runId.slice(0, 6)}.${ext(failed.screenshot)}`;
       add(name, readFileSync(join(old.shotsDir, failed.screenshot)));
       parts.unshift(`<figure><a href="${encodeURI(name)}"><img src="${encodeURI(name)}" alt="Before"></a><figcaption>Before: failed in run ${esc(runId)}${failed.error ? ` — ${esc(failed.error)}` : ''}</figcaption></figure>`);
       pictures++;
@@ -108,7 +119,7 @@ export function evidenceZip(input: EvidenceInput): { zip: Uint8Array; folder: st
 <h1>${esc(input.title)}</h1><p class="meta">Run ${esc(input.runId)} · ${esc(new Date(input.startedAt).toLocaleString())} · ${esc(input.appUrl)} · ${esc(input.status)} · ${counts.map(([s, n]) => `${n} ${s}`).join(', ')} · ${pictures} pictures</p>
 ${retestHtml.length ? `<h1 style="font-size:22px;margin-top:24px">Re-test evidence</h1>${retestHtml.join('')}<h1 style="font-size:22px;margin-top:24px">Every test case</h1>` : ''}${html.join('')}
 <p class="meta">Made by EasyTesting. The pictures are in the folders next to this page; results.csv has the same results for a spreadsheet.</p></body></html>`;
-  files[`${folder}/Open me - summary.html`] = new TextEncoder().encode(page);
-  files[`${folder}/results.csv`] = new TextEncoder().encode('﻿' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n');
+  files['Open me - summary.html'] = new TextEncoder().encode(page);
+  files['results.csv'] = new TextEncoder().encode('﻿' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n');
   return { zip: zipSync(files), folder, pictures };
 }
