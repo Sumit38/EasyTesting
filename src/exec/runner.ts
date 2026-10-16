@@ -57,6 +57,8 @@ export interface StepResult {
   notes: string[];
   ms: number;
   screenshot?: string;
+  /** A picture of the page after the step worked: evidence for re-test validation. */
+  evidence?: string;
 }
 
 export interface CaseResult {
@@ -162,10 +164,15 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
     }),
   }));
   let shotAt = 0;
-  const publish = (current?: { case: number; step: number }) => writeProgress(opts.healDir, { cases: live, running: true, current, live: shotAt ? 'live.png' : undefined, liveAt: shotAt || undefined });
-  const snapLive = async (page: Page) => {
+  let lastShot: string | undefined; // the newest picture of the page, shown live on the run screen
+  const publish = (current?: { case: number; step: number }) => writeProgress(opts.healDir, { cases: live, running: true, current, live: lastShot, liveAt: shotAt || undefined });
+  /** Keeps a picture of the page after a step that worked. JPEG, so a run of a hundred steps stays a few megabytes. */
+  const snapStep = async (page: Page, caseId: string, step: number, r: StepResult) => {
+    const file = `${caseId}-step${step}-ok.jpg`.replace(/[^\w.-]/g, '_');
     try {
-      await page.screenshot({ path: join(opts.healDir, 'shots', 'live.png'), timeout: 3000 });
+      await page.screenshot({ path: join(opts.healDir, 'shots', file), type: 'jpeg', quality: 70, timeout: 3000 });
+      r.evidence = file;
+      lastShot = file;
       shotAt = Date.now();
     } catch {
       /* no picture this time */
@@ -254,6 +261,8 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
             const file = `${c.id}-step${i + 1}.png`.replace(/[^\w.-]/g, '_');
             await page.screenshot({ path: join(opts.healDir, 'shots', file) });
             r.screenshot = file;
+            lastShot = file;
+            shotAt = Date.now();
           } catch {
             /* the page may be gone */
           }
@@ -262,7 +271,7 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
         }
         r.ms = Date.now() - t0;
         await coverage.visit(pageLike(page)).catch(() => undefined);
-        if (r.status === 'passed') await snapLive(page);
+        if (r.status === 'passed') await snapStep(page, c.id, i + 1, r);
         publish({ case: k, step: i });
       }
 
@@ -290,7 +299,7 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
   }
 
   if (stopped) log(`\n■ ${stopped}`);
-  writeResults(opts.healDir, results, { ...(shotAt ? { live: 'live.png', liveAt: shotAt } : {}), ...(stopped ? { stopped } : {}) });
+  writeResults(opts.healDir, results, { ...(lastShot ? { live: lastShot, liveAt: shotAt } : {}), ...(stopped ? { stopped } : {}) });
   return { results, passed: results.every((r) => r.status === 'passed' || r.status === 'skipped') };
 }
 

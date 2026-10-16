@@ -159,8 +159,10 @@ describe('running plain-English test cases', () => {
     assert.deepEqual(seen[1], { statuses: ['passed', 'pending'], running: true }, 'when the second starts, the first is already shown as passed');
     const end = JSON.parse(readFileSync(join(heal, 'steps.json'), 'utf8'));
     assert.equal(end.running, undefined, 'the finished file is not marked as running');
-    assert.equal(end.live, 'live.png', 'the last picture of the page is kept');
-    assert.ok(existsSync(join(heal, 'shots', 'live.png')));
+    assert.match(end.live, /-ok\.jpg$/, 'the last picture of the page is kept');
+    assert.ok(existsSync(join(heal, 'shots', end.live)));
+    // Every step that worked has its own picture, for re-test evidence.
+    for (const c of end.cases) for (const s of c.steps) if (s.status === 'passed') assert.ok(s.evidence && existsSync(join(heal, 'shots', s.evidence)), `${c.id} step ${s.index + 1}`);
     assert.deepEqual(end.cases.map((c: CaseResult) => c.status), results.map((r) => r.status));
   });
 });

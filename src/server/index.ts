@@ -48,6 +48,7 @@ export interface ServerOptions {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FRAMEWORKS: Framework[] = ['playwright', 'selenium', 'custom'];
+const ACTIVE_STATUS = ['queued', 'installing', 'running'];
 
 export function createApp(opts: ServerOptions = {}): { server: Server; runs: RunManager } {
   const runs = new RunManager({ dataDir: opts.dataDir ?? '.heal-server', timeoutMs: opts.timeoutMs, maxConcurrent: opts.maxConcurrent, maxPerUser: opts.maxPerUser, blockPrivateTargets: opts.blockPrivateTargets });
@@ -392,12 +393,20 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
       }
       if (action === 'steps' && method === 'GET') return json(res, 200, runs.steps(id) ?? { cases: [] });
       if (action === 'shots' && sub && method === 'GET') {
-        const file = runs.screenshot(id, sub.endsWith('.png') ? sub : sub + '.png');
+        const file = runs.screenshot(id, /\.(?:png|jpg)$/.test(sub) ? sub : sub + '.png');
         if (!file) throw httpError(404, 'No such screenshot.');
-        res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'private, max-age=3600' });
+        res.writeHead(200, { 'content-type': file.endsWith('.jpg') ? 'image/jpeg' : 'image/png', 'cache-control': 'private, max-age=3600' });
         return res.end(readFileSync(file));
       }
       if (action === 'report' && method === 'GET') return json(res, 200, runs.report(id));
+      if (action === 'screenshots.zip' && method === 'GET') {
+        if (ACTIVE_STATUS.includes(run.status)) throw httpError(409, 'The run is still going. The pictures can be downloaded when it has finished.');
+        const out = runs.screenshotsZip(id);
+        if (!out) throw httpError(404, 'This run has no step pictures. They are kept for runs of test cases written in the app.');
+        const name = out.folder.replace(/[^\w .-]+/g, '_');
+        res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="${name}.zip"; filename*=UTF-8''${encodeURIComponent(out.folder)}.zip`, 'x-pictures': String(out.pictures) });
+        return res.end(Buffer.from(out.zip));
+      }
       if (action === 'rerun' && method === 'POST') {
         if (!codeUploads && !run.kind && !run.demo) throw noCode();
         await mayRun(owner, run.kind === 'cases' ? run.appUrl : undefined);

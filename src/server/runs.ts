@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { BugTracker, type Bug, type BugStatus, type Severity } from './bugs.js';
 import { DEMO_FILES, DEMO_SCENARIOS_CSV } from './demo.js';
+import { evidenceZip } from './evidence.js';
 import { buildReport } from './report.js';
 import { readCoverage, readResults, severityFromScenario, syntheticResult, withReporter } from './results.js';
 import { AppDb } from './appdb.js';
@@ -291,11 +292,28 @@ export class RunManager {
     }
   }
 
-  /** Path of a failure screenshot, or undefined when the name is not a plain file name. */
+  /** Path of a picture of a step, or undefined when the name is not a plain file name. */
   screenshot(id: string, file: string): string | undefined {
-    if (!/^[\w.-]+\.png$/.test(file)) return undefined;
+    if (!/^[\w.-]+\.(?:png|jpg)$/.test(file)) return undefined;
     const p = join(this.healDir(id), 'shots', file);
     return existsSync(p) ? p : undefined;
+  }
+
+  /** Every picture of a test-case run, with a summary and the before/after of bugs it re-tested, as one zip. */
+  screenshotsZip(id: string) {
+    const run = this.get(id);
+    const data = this.steps(id) as { cases: Parameters<typeof evidenceZip>[0]['cases'] } | undefined;
+    if (!run || !data?.cases?.length) return undefined;
+    this.reconcile(id);
+    const retested = this.tracker(run.project).list().filter((b) => b.retest?.runId === id);
+    return evidenceZip({
+      runId: id, title: run.name, appUrl: run.appUrl, startedAt: run.createdAt, status: run.status, cases: data.cases, shotsDir: join(this.healDir(id), 'shots'), retested,
+      earlier: (other) => {
+        const old = this.get(other);
+        const cases = old && old.project === run.project ? (this.steps(other) as { cases: Parameters<typeof evidenceZip>[0]['cases'] } | undefined)?.cases : undefined;
+        return cases ? { cases, shotsDir: join(this.healDir(other), 'shots') } : undefined;
+      },
+    });
   }
 
   /** Runs a finished run's tests again, on the same app link. This is how a fixed bug gets re-tested. */

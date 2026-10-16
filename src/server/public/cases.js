@@ -31,6 +31,23 @@
     el('a', { href: URL.createObjectURL(await res.blob()), download: name }).click();
   };
 
+  /** Every picture of a finished test-case run, as a zip that unpacks into one folder. */
+  async function downloadShots(runId, btn) {
+    const was = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Preparing…';
+    try {
+      const res = await api(`/runs/${runId}/screenshots.zip`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not prepare the pictures.');
+      const cd = res.headers.get('content-disposition') || '';
+      const star = cd.match(/filename\*=UTF-8''([^;]+)/);
+      const name = star ? decodeURIComponent(star[1]) : (cd.match(/filename="([^"]+)"/) || [])[1] || `${runId}-screenshots.zip`;
+      el('a', { href: URL.createObjectURL(await res.blob()), download: name }).click();
+      toast(`Downloaded ${res.headers.get('x-pictures') || ''} pictures. Unzip it to get one folder; open "Open me - summary.html" inside.`);
+    } catch (e) { fail(e); }
+    btn.disabled = false; btn.textContent = was;
+  }
+  const shotsButton = (runId, label = '⬇ Download screenshots') => el('button', { class: 'btn', text: label, title: 'A zip with a folder per test case, a picture of every step, a summary page and, for re-tested bugs, the before and after', onclick: (e) => downloadShots(runId, e.currentTarget) });
+
   /* ---------- sign in ---------- */
   /** mode: 'setup' (the very first account, an admin), 'signin' or 'signup' (a new tester, when the server allows it). */
   function showAuth(setup, canSignup = false) {
@@ -758,7 +775,7 @@
       el('div', { class: 'prog ' + tone },
         el('div', {},
           el('div', { class: 'proghead' }, el('div', {}, el('h2', { text: title }), el('p', { class: 'now', text: now })),
-            active ? stopButton(run) : null),
+            active ? stopButton(run) : cases.length ? shotsButton(run.id) : null),
           el('div', { class: 'segs', title: 'One block per test case' }, ...cases.map((c) => el('span', { class: c.status, title: `${c.id}: ${(CASE_WORD[c.status] || [c.status])[0]}` }))),
           el('div', { class: 'counts' },
             el('span', { class: 'ok' }, el('b', { text: '✔ ' + passed }), ' passed'),
@@ -805,6 +822,11 @@
 
   Ext.afterReport.push((r) => {
     if (!r.guided) return;
+    // Evidence for re-test validation: every step's picture, and the before/after of each re-tested bug.
+    const retests = r.bugs.filter((b) => b.retest && b.retest.runId === r.run.id).length;
+    $('rBody').prepend(el('div', { class: 'note good no-print', style: 'display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between' },
+      el('span', { text: retests ? `This run re-tested ${retests} bug${retests === 1 ? '' : 's'}. Download the screenshots to keep the before and after pictures as evidence.` : 'Keep a picture of every step for later: download the screenshots as one folder.' }),
+      shotsButton(r.run.id)));
     $('rBody').prepend(el('div', { class: 'guided' },
       el('div', {}, el('b', { text: r.guided.confidence + '%' }), el('span', { text: 'confidence in these results' })),
       el('div', {}, el('b', { text: r.guided.understanding + '%' }), el('span', { text: 'steps understood' })),
