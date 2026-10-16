@@ -186,7 +186,10 @@ export class RunManager {
     return join(this.dir, 'projects', slug);
   };
   private storeFile = (slug: string) => join(this.projectFolder(slug), 'fingerprints.db');
-  private tracker = (slug: string) => new BugTracker(this.app.db, slug);
+  /** The bugs of one project. */
+  readonly tracker = (slug: string) => new BugTracker(this.app.db, slug);
+  /** Called once a finished run's results have updated its project's bugs; the web layer reports re-tests to linked tickets. */
+  onReconciled?: (run: Run, bugs: Bug[]) => void;
   logFile = (id: string) => join(this.runDir(id), 'run.log');
   private save(run: Run) {
     writeFileSync(join(this.runDir(run.id), 'run.json'), JSON.stringify(run, null, 2));
@@ -443,6 +446,11 @@ export class RunManager {
     // A report is a record of how things stood after this run, so keep the bug list as it was then.
     writeFileSync(join(this.healDir(id), 'bugs-snapshot.json'), JSON.stringify(bugs));
     writeFileSync(marker, new Date().toISOString());
+    try {
+      this.onReconciled?.(run, bugs);
+    } catch {
+      /* reporting elsewhere must not break the run */
+    }
   }
 
   scenarios(project: string): { csv: string; scenarios: Scenario[] } {

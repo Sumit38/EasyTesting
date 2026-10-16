@@ -52,3 +52,12 @@ npm ci && npm run build
 npx playwright-core install --with-deps chromium
 HEAL_CODE_UPLOADS=off node dist/cli.js serve --host 0.0.0.0 --port 8080 --data /var/lib/easytesting
 ```
+
+## Jira and Azure DevOps
+
+An admin connects them once under **Team → Connections**. Testers then file any bug from the report: they pick **Jira** or **Azure DevOps**, then **Bug** (a new bug on its own) or **User story** (a new bug linked to a story they search for). EasyTesting shows each ticket's status and, when a re-test passes or fails, adds a comment to the ticket.
+
+- **Jira Cloud:** your address (`https://yourcompany.atlassian.net`), the email of the account that owns the token, an API token from id.atlassian.com → Security → API tokens, and the project key. Tickets are created as that account. Linked bugs use Jira's "Relates" link.
+- **Azure DevOps Services:** your organization (`https://dev.azure.com/yourorg`), a personal access token with **Work Items: Read & write**, and the project name. A linked bug becomes a child of the user story. For Scrum projects set the story type to "Product Backlog Item"; for Basic, both types to "Issue".
+
+Settings are tested before they are saved. Tokens are stored encrypted with a key kept in `secret.key` in the data folder (on Railway, the volume). Back that file up with the database; if it is lost, the admin re-enters the tokens.

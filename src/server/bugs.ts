@@ -10,6 +10,24 @@ export interface BugEvent {
   event: string;
 }
 
+/** Where the ticket stands in Jira or Azure DevOps, as last read. */
+export interface TicketStatus {
+  name: string;
+  category: 'todo' | 'doing' | 'done';
+  at: string;
+}
+
+/** The Jira issue or Azure DevOps work item this bug was filed as. */
+export interface Ticket {
+  tool: 'jira' | 'ado';
+  key: string;
+  url: string;
+  /** The user story it was linked to, if the tester chose one. */
+  story?: { key: string; title: string; status?: string; url: string };
+  createdAt: string;
+  status?: TicketStatus;
+}
+
 export interface Bug {
   id: string;
   /** One bug per failing test: file plus title. */
@@ -27,6 +45,7 @@ export interface Bug {
   occurrences: number;
   /** Result of the most recent re-test, once the bug has been tested again after being found. */
   retest?: { runId: string; result: 'passed' | 'failed'; at: string };
+  ticket?: Ticket;
   history: BugEvent[];
 }
 
@@ -105,6 +124,28 @@ export class BugTracker {
       }
     }
     return s.bugs;
+  }
+
+  /** Records the ticket a bug was filed as. */
+  setTicket(id: string, ticket: Ticket, by: string): Bug | undefined {
+    return this.edit((s) => {
+      const bug = s.bugs.find((b) => b.id === id);
+      if (!bug) return undefined;
+      bug.ticket = ticket;
+      const where = ticket.tool === 'jira' ? 'Jira' : 'Azure DevOps';
+      bug.history.push({ at: ticket.createdAt, event: `Filed in ${where} as ${ticket.key}${ticket.story ? `, linked to user story ${ticket.story.key}` : ''} by ${by}` });
+      return bug;
+    });
+  }
+
+  /** Stores the ticket's latest status, noting in the history when it changed. */
+  setTicketStatus(id: string, status: TicketStatus): void {
+    this.edit((s) => {
+      const bug = s.bugs.find((b) => b.id === id);
+      if (!bug?.ticket) return;
+      if (bug.ticket.status?.name && bug.ticket.status.name !== status.name) bug.history.push({ at: status.at, event: `${bug.ticket.key} moved to "${status.name}"` });
+      bug.ticket.status = status;
+    });
   }
 
   /** A person changes a bug: its status, severity or a note. */

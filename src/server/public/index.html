@@ -291,6 +291,17 @@
   .gapq { font-size: 13.5px; font-weight: 600; color: var(--text); }
   .gapfix { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .gapfix input { flex: 1 1 260px; min-width: 0; width: auto; }
   .gapread { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 13px; color: var(--muted); }
+  .ticket { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; font-weight: 700; text-decoration: none; color: var(--text); border: 1px solid var(--line); border-radius: 99px; padding: 2px 4px 2px 10px; background: var(--panel-2); }
+  .ticket:hover { border-color: var(--brand); }
+  .tdetail { font-size: 13px; color: var(--muted); margin-top: 8px; overflow-wrap: anywhere; } .tdetail a { color: var(--brand); font-weight: 600; }
+  .tfile { margin-top: 8px; } .tpanel { margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--panel-2); display: grid; gap: 10px; }
+  .tq { font-size: 13.5px; font-weight: 700; }
+  .tpanel .radios { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 8px; }
+  .storypick { display: grid; gap: 8px; } .stories { display: grid; gap: 4px; max-height: 240px; overflow: auto; }
+  .story { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-size: 13.5px; background: var(--panel); min-width: 0; }
+  .story span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .story.on { border-color: var(--brand); }
+  .conns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; align-items: start; }
+  .conn .connform { display: grid; gap: 10px; margin-top: 12px; }
   .stepres img { max-width: 260px; border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; display: block; }
   .stepres { grid-template-columns: 22px minmax(0, 1fr) auto; }
   .stepres .what { min-width: 0; overflow-wrap: anywhere; }
@@ -768,6 +779,8 @@ $('copyLog').onclick = async () => { try { await navigator.clipboard.writeText($
 
 /* ---------- report ---------- */
 let reportId = null, lastReportSig = '';
+let IG = null; // which of Jira and Azure DevOps are connected
+const ticketsRead = {}; // report id -> when its ticket statuses were last read
 const TEST_STATUS = { passed: ['Passed', 'ok'], failed: ['Failed', 'bad'], timedOut: ['Timed out', 'bad'], skipped: ['Skipped', 'warn'], interrupted: ['Did not finish', 'warn'] };
 const SCEN_STATUS = { passed: ['Passed', 'ok'], failed: ['Failed', 'bad'], skipped: ['Unattended: skipped', 'warn'], 'no-test': ['Unattended: no test', 'warn'] };
 const BUG_STATUS = {
@@ -887,10 +900,11 @@ function renderReport(r) {
     const rt = b.retest ? el('span', { class: 'badge b-' + (b.retest.result === 'passed' ? 'ok' : 'bad'), text: b.retest.result === 'passed' ? 'Re-test passed' : 'Re-test failed' })
       : el('span', { class: 'badge b-mute', text: b.status === 'fixed' ? 'Waiting for a re-test' : 'Not re-tested yet' });
     return el('div', { class: 'heal' },
-      el('div', { class: 'row1' }, el('b', { text: b.id }), el('span', { class: 'tn', text: b.test }), el('span', { class: 'spacer' }),
+      el('div', { class: 'row1' }, el('b', { text: b.id }), el('span', { class: 'tn', text: b.test }), el('span', { class: 'spacer' }), b.ticket ? ticketChip(b.ticket) : null,
         el('span', { class: 'badge sevb sev-' + b.severity, text: b.severity }), sev),
       el('div', { class: 'why', style: 'margin-top:8px' }, el('b', { text: (CAUSE[b.cause] || b.cause) + ': ' }), b.error.split('\n')[0].slice(0, 200)),
       el('div', { class: 'foot' }, bdg(BUG_STATUS, b.status), rt, el('span', { class: 'hint', text: `seen in ${b.occurrences} run${b.occurrences === 1 ? '' : 's'}` }), el('span', { class: 'spacer' }), act),
+      b.ticket ? ticketDetail(b.ticket) : live ? fileTicket(b) : null,
       el('details', { class: 'h', style: 'margin-top:8px' }, el('summary', { text: `History (${b.history.length})` }), el('ul', { class: 'hist' }, ...b.history.map((h) => el('li', { text: `${when(h.at)}: ${h.event}` })))));
   });
   const fixedWaiting = live && r.bugs.some((b) => b.status === 'fixed');
@@ -929,6 +943,74 @@ function renderReport(r) {
     el('button', { class: 'btn no-print', text: 'Review locator fixes', onclick: () => { location.hash = '#/run/' + reportId; } })));
 }
 
+/* ---------- bugs in Jira and Azure DevOps ---------- */
+const TOOL_NAME = { jira: 'Jira', ado: 'Azure DevOps' };
+const TICKET_CLASS = { todo: 'mute', doing: 'info', done: 'ok' };
+function ticketChip(t) {
+  return el('a', { class: 'ticket', href: t.url, target: '_blank', rel: 'noopener', title: 'Open in ' + TOOL_NAME[t.tool] },
+    el('span', { text: (t.tool === 'jira' ? '🟦 ' : '🔷 ') + t.key }),
+    t.status ? el('span', { class: 'badge b-' + (TICKET_CLASS[t.status.category] || 'mute'), text: t.status.name }) : null);
+}
+function ticketDetail(t) {
+  return el('div', { class: 'tdetail' },
+    el('span', { text: `Filed in ${TOOL_NAME[t.tool]} as ` }), el('a', { href: t.url, target: '_blank', rel: 'noopener', text: t.key + ' ↗' }),
+    t.story ? el('span', {}, ' · linked to user story ', el('a', { href: t.story.url, target: '_blank', rel: 'noopener', text: `${t.story.key} ${t.story.title} ↗` })) : null,
+    t.status ? el('span', { class: 'hint', text: ` · status "${t.status.name}", checked ${when(t.status.at)}` }) : null);
+}
+/** "File this bug": pick the tool, then Bug on its own or linked to a user story found by search. */
+function fileTicket(b) {
+  const on = Object.keys(TOOL_NAME).filter((k) => IG && IG[k] && IG[k].connected);
+  if (!on.length) return null;
+  let tool = on[0], mode = 'bug', story = null, timer;
+  const panel = el('div', { class: 'tpanel hidden' });
+  const results = el('div', { class: 'stories' });
+  const err = el('div', { class: 'err' });
+  const search = el('input', { type: 'text', placeholder: 'Search user stories by words or key, e.g. checkout or SHOP-12', autocomplete: 'off' });
+  const go = el('button', { class: 'btn primary', text: 'Create ticket' });
+  const radio = (name, value, label, checked, disabled, hint) => el('label', { class: 'radio' + (checked ? ' on' : '') + (disabled ? ' off' : '') },
+    el('input', { type: 'radio', name: name + b.id, value, checked, disabled, onchange: () => { if (name === 'tool') { tool = value; story = null; results.replaceChildren(); } else mode = value; paint(); } }),
+    el('div', {}, el('b', { text: label }), hint ? el('span', { text: hint }) : null));
+  const find = async () => {
+    results.replaceChildren(el('div', { class: 'hint', text: 'Searching…' }));
+    try {
+      const x = await api(`/integrations/${tool}/stories?q=${encodeURIComponent(search.value.trim())}`);
+      const list = await x.json();
+      if (!x.ok) throw new Error(list.error);
+      results.replaceChildren(...(list.length ? list.map((st) => el('label', { class: 'story' + (story && story.key === st.key ? ' on' : '') },
+        el('input', { type: 'radio', name: 'story' + b.id, checked: !!story && story.key === st.key, onchange: () => { story = st; paint(); } }),
+        el('b', { text: st.key }), el('span', { text: st.title }), el('span', { class: 'badge b-mute', text: st.status }))) : [el('div', { class: 'hint', text: 'No user stories found. Try other words or the story key.' })]));
+    } catch (e) { results.replaceChildren(el('div', { class: 'err', text: e.message })); }
+  };
+  search.oninput = () => { clearTimeout(timer); timer = setTimeout(find, 350); };
+  const paint = () => {
+    const bType = (IG[tool] && IG[tool].bugType) || 'Bug';
+    const sType = (IG[tool] && IG[tool].storyType) || 'user story';
+    panel.replaceChildren(
+      el('div', { class: 'tq', text: 'Which tool should this bug go to?' }),
+      el('div', { class: 'radios' }, ...Object.entries(TOOL_NAME).map(([k, n]) => radio('tool', k, n, tool === k, !on.includes(k), IG[k] && IG[k].connected ? `Project ${IG[k].project}` : 'Not connected: an admin can connect it under Team'))),
+      el('div', { class: 'tq', text: 'How should it be tracked?' }),
+      el('div', { class: 'radios' },
+        radio('mode', 'bug', 'Bug', mode === 'bug', false, `A new ${bType} on its own.`),
+        radio('mode', 'story', 'User story', mode === 'story', false, `A new ${bType}, linked to the ${sType} it belongs to, so you can track bugs per story.`)),
+      mode === 'story' ? el('div', { class: 'storypick' }, search, results, story ? el('div', { class: 'hint', text: `Will be linked to ${story.key} ${story.title}.` }) : null) : null,
+      el('div', { class: 'cta' }, go, el('button', { class: 'btn', text: 'Cancel', onclick: () => panel.classList.add('hidden') })), err);
+    if (mode === 'story' && !results.children.length) find();
+  };
+  go.onclick = async () => {
+    err.textContent = '';
+    if (mode === 'story' && !story) { err.textContent = 'Choose the user story to link this bug to.'; return; }
+    go.disabled = true; go.textContent = 'Creating…';
+    const res = await api(`/runs/${reportId}/tickets`, { method: 'POST', body: JSON.stringify({ bugId: b.id, tool, storyKey: mode === 'story' ? story.key : undefined }) });
+    const out = await res.json().catch(() => ({}));
+    go.disabled = false; go.textContent = 'Create ticket';
+    if (!res.ok) { err.textContent = out.error || 'Could not create the ticket.'; return; }
+    toast(`Filed as ${out.ticket.key} in ${TOOL_NAME[tool]}.`);
+    lastReportSig = ''; loadReport();
+  };
+  const open = el('button', { class: 'mini', text: '📤 File in Jira / Azure DevOps', onclick: () => { panel.classList.toggle('hidden'); if (!panel.children.length) paint(); } });
+  return el('div', { class: 'tfile no-print' }, open, panel);
+}
+
 async function patchBug(bugId, change) {
   const res = await api(`/runs/${reportId}/bugs/${bugId}`, { method: 'PATCH', body: JSON.stringify(change) });
   if (!res.ok) return toast((await res.json()).error);
@@ -953,8 +1035,19 @@ async function loadReport() {
   $('rMeta').replaceChildren(el('span', { text: r.run.framework === 'selenium' ? 'Selenium' : 'Playwright' }), el('span', { text: r.run.appUrl || 'no app link' }), el('span', { text: 'Run ' + when(r.run.createdAt) }));
   $('repBackRun').href = '#/run/' + reportId;
   $('rRerun').classList.toggle('hidden', !r.isLatest);
+  if (!IG || Date.now() - IG.at > 60_000) { try { IG = { ...(await (await api('/integrations')).json()), at: Date.now() }; } catch { IG = { at: Date.now() }; } }
   const sig = JSON.stringify(r);
   if (sig !== lastReportSig) { lastReportSig = sig; renderReport(r); for (const f of Ext.afterReport) f(r); }
+  // Bring ticket statuses up to date from Jira / Azure DevOps, at most once a minute per report.
+  if (r.isLatest && r.bugs.some((b) => b.ticket) && Date.now() - (ticketsRead[reportId] || 0) > 60_000) {
+    ticketsRead[reportId] = Date.now();
+    const id = reportId;
+    api('/runs/' + id + '/tickets/refresh', { method: 'POST', body: '{}' }).then(async (x) => {
+      const out = await x.json().catch(() => ({}));
+      if (out.errors && out.errors.length) toast('Could not read some ticket statuses: ' + out.errors[0]);
+      if (out.checked && reportId === id) { lastReportSig = ''; loadReport(); }
+    });
+  }
   if (ACTIVE.includes(r.run.status)) $('rBody').prepend(note('This run is still going. The report updates when it finishes.'));
 }
 $('rPrint').onclick = () => window.print();

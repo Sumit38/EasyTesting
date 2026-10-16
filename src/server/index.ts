@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto';
 import { Auth, AuthError, clearCookie, cookie, COOKIE, sessionCookie, type User } from './auth.js';
 import { blockedReason } from '../exec/guard.js';
 import { decodeText } from '../cases/decode.js';
+import { IntegrationError, Integrations, type Tool } from './integrations.js';
 import { DEMO_TEST_DATA, DEMO_USE_CASE, demoPage } from './demo.js';
 import { RunManager, type Framework } from './runs.js';
 
@@ -41,6 +42,8 @@ export interface ServerOptions {
   blockPrivateTargets?: boolean;
   timeoutMs?: number;
   maxUploadBytes?: number;
+  /** Tests only: a stand-in for Jira and Azure DevOps. */
+  integrationFetch?: typeof fetch;
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -93,6 +96,17 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
   const maxUpload = opts.maxUploadBytes ?? 100 * 1024 * 1024;
   const auth = new Auth(runs.app.db);
   const suites = new SuiteStore(runs.app.db);
+  const integrations = new Integrations(runs.app.db, opts.dataDir ?? '.heal-server', opts.integrationFetch);
+  // When a re-test decides a filed bug's fate, say so on its ticket.
+  runs.onReconciled = (run, bugs) => {
+    for (const b of bugs) {
+      if (!b.ticket || b.retest?.runId !== run.id) continue;
+      const text = b.retest.result === 'passed'
+        ? `EasyTesting re-tested this on ${new Date(b.retest.at).toUTCString()} (run ${run.id}): the test passed. Verified fixed.`
+        : `EasyTesting re-tested this on ${new Date(b.retest.at).toUTCString()} (run ${run.id}): the test still fails, so the bug is reopened. ${b.error.split('\n')[0].slice(0, 300)}`;
+      integrations.comment(b.ticket, text).catch((e) => console.error(`[integrations] could not comment on ${b.ticket!.key}: ${(e as Error).message}`));
+    }
+  };
   const suites_useCase = (owner: number, title: string, text: string) => suites.addUseCase(owner, title, text);
   /** Uploaded spreadsheets waiting for the tester to confirm which column is which. In memory, 30 minutes. */
   const imports = new Map<string, { owner: number; rows: string[][]; filename: string; at: number }>();
@@ -396,6 +410,42 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
         if (!scenarios.length) throw httpError(400, 'No scenarios found. Use a CSV with a header row such as: id,title,area,priority');
         return json(res, 200, { scenarios });
       }
+      if (action === 'tickets' && !sub && method === 'POST') {
+        // File one of this run's bugs in Jira or Azure DevOps, linked to a user story when one is chosen.
+        const b = await json_<{ bugId?: string; tool?: Tool; storyKey?: string }>(10_000);
+        if (b.tool !== 'jira' && b.tool !== 'ado') throw httpError(400, 'Choose Jira or Azure DevOps.');
+        const tracker = runs.tracker(run.project);
+        const bug = tracker.list().find((x) => x.id === b.bugId);
+        if (!bug) throw httpError(404, 'No such bug.');
+        if (bug.ticket) throw httpError(409, `This bug is already filed as ${bug.ticket.key}.`);
+        try {
+          let story;
+          if (b.storyKey) {
+            story = (await integrations.stories(b.tool, String(b.storyKey))).find((x) => x.key.toLowerCase() === String(b.storyKey).toLowerCase());
+            if (!story) throw httpError(400, `User story ${b.storyKey} was not found.`);
+          }
+          const proto = String(req.headers['x-forwarded-proto'] ?? (opts.secureCookies ? 'https' : 'http')).split(',')[0];
+          const ticket = await integrations.createTicket(b.tool, bug, { story, appUrl: run.appUrl || undefined, reportUrl: req.headers.host ? `${proto}://${req.headers.host}/#/report/${run.id}` : undefined });
+          return json(res, 201, tracker.setTicket(bug.id, ticket, me.name || me.email));
+        } catch (e) {
+          if (e instanceof IntegrationError) throw httpError(e.status, e.message);
+          throw e;
+        }
+      }
+      if (action === 'tickets' && sub === 'refresh' && method === 'POST') {
+        // Reads the current status of this project's tickets; each is read at most once a minute.
+        const tracker = runs.tracker(run.project);
+        const due = tracker.list().filter((x) => x.ticket && (!x.ticket.status || Date.now() - Date.parse(x.ticket.status.at) > 60_000)).slice(0, 25);
+        const errors: string[] = [];
+        for (const x of due) {
+          try {
+            tracker.setTicketStatus(x.id, await integrations.status(x.ticket!));
+          } catch (e) {
+            errors.push(`${x.ticket!.key}: ${(e as Error).message}`);
+          }
+        }
+        return json(res, 200, { checked: due.length, errors: errors.slice(0, 3) });
+      }
       if (action === 'bugs' && sub && method === 'PATCH') {
         const body = JSON.parse((await readBody(req, 100_000)).toString() || '{}');
         const bug = runs.updateBug(id, sub, { status: body.status, severity: body.severity, note: body.note });
@@ -419,6 +469,39 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
         return res.end(zip);
       }
     }
+    // ---- Jira and Azure DevOps ------------------------------------------------------
+    const ig = path.match(/^\/api\/integrations(?:\/(jira|ado))?(?:\/(test|stories))?$/);
+    if (ig) {
+      const tool = ig[1] as Tool | undefined;
+      const wrap = async <T,>(fn: () => Promise<T>) => {
+        try {
+          return await fn();
+        } catch (e) {
+          if (e instanceof IntegrationError) throw httpError(e.status, e.message);
+          throw e;
+        }
+      };
+      if (!tool && method === 'GET') return json(res, 200, integrations.summary());
+      if (tool && ig[2] === 'stories' && method === 'GET') return json(res, 200, await wrap(() => integrations.stories(tool, url.searchParams.get('q') ?? '')));
+      if (tool && !isAdmin) throw httpError(403, 'Only an admin can change the Jira and Azure DevOps connections.');
+      if (tool && ig[2] === 'test' && method === 'POST') {
+        const b = await json_<Record<string, unknown>>(20_000);
+        return json(res, 200, { message: await wrap(async () => { const { config, token } = integrations.clean(tool, b); return integrations.test(tool, config, token); }) });
+      }
+      if (tool && !ig[2] && method === 'PUT') {
+        // Saved only once it works, so a mistyped token never replaces a good one.
+        const b = await json_<Record<string, unknown>>(20_000);
+        const message = await wrap(async () => {
+          const { config, token } = integrations.clean(tool, b);
+          const said = await integrations.test(tool, config, token);
+          integrations.save(tool, config, token);
+          return said;
+        });
+        return json(res, 200, { message, summary: integrations.summary() });
+      }
+      if (tool && !ig[2] && method === 'DELETE') return json(res, 200, { removed: integrations.remove(tool), summary: integrations.summary() });
+    }
+
     throw httpError(404, 'Not found.');
   }
 
@@ -473,8 +556,8 @@ const csvCell = (v: unknown) => {
 };
 
 function bugsCsv(bugs: import('./bugs.js').Bug[]): string {
-  const head = ['id', 'title', 'test', 'severity', 'status', 'cause', 'first run', 'last run', 'times seen', 're-test result', 'error'];
-  const rows = bugs.map((b) => [b.id, b.title, b.test, b.severity, b.status, b.cause, b.firstRun, b.lastRun, b.occurrences, b.retest?.result ?? '', b.error]);
+  const head = ['id', 'title', 'test', 'severity', 'status', 'cause', 'first run', 'last run', 'times seen', 're-test result', 'ticket', 'ticket status', 'ticket link', 'user story', 'error'];
+  const rows = bugs.map((b) => [b.id, b.title, b.test, b.severity, b.status, b.cause, b.firstRun, b.lastRun, b.occurrences, b.retest?.result ?? '', b.ticket?.key ?? '', b.ticket?.status?.name ?? '', b.ticket?.url ?? '', b.ticket?.story ? `${b.ticket.story.key} ${b.ticket.story.title}` : '', b.error]);
   return [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 

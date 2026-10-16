@@ -829,6 +829,79 @@
           el('td', {}, el('button', { class: 'mini', text: u.disabled ? 'Enable' : 'Disable', onclick: () => patch(u.id, { disabled: !u.disabled }) }),
             el('button', { class: 'mini', text: 'Set password', onclick: () => { const p = prompt('New password for ' + u.name + ' (8+ characters)'); if (p) patch(u.id, { password: p }); } }))))))),
       el('section', { class: 'card' }, el('h2', { text: 'Add a person' }), el('div', { class: 'adv' }, field('Name', name), field('Email', email), field('Password', pw), field('Role', role)),
-        el('div', { class: 'cta' }, el('button', { class: 'btn primary', text: 'Add person', onclick: async () => { try { await send('/users', { email: email.value, name: name.value, password: pw.value, role: role.value }); toast('Added.'); renderTeam(); } catch (e) { fail(e); } } }))));
+        el('div', { class: 'cta' }, el('button', { class: 'btn primary', text: 'Add person', onclick: async () => { try { await send('/users', { email: email.value, name: name.value, password: pw.value, role: role.value }); toast('Added.'); renderTeam(); } catch (e) { fail(e); } } }))),
+      el('div', { id: 'connections' }));
+    renderConnections();
+  }
+
+  /* ---------- Jira and Azure DevOps: set up once by an admin, used by everyone to file bugs ---------- */
+  const TOOLS = {
+    jira: {
+      name: 'Jira Cloud', icon: '🟦',
+      fields: [
+        ['site', 'Jira address', 'https://yourcompany.atlassian.net', 'Your Jira Cloud address.'],
+        ['email', 'Account email', 'qa-bot@yourcompany.com', 'The Atlassian account that owns the API token. Tickets are created as this person.'],
+        ['token', 'API token', 'Paste the API token', 'Create one at id.atlassian.com → Security → API tokens. Stored encrypted on this server and never shown again.'],
+        ['project', 'Project key', 'SHOP', 'The letters before the number in ticket keys, like SHOP in SHOP-123.'],
+        ['bugType', 'Bug issue type', 'Bug', 'Usually "Bug".'],
+        ['storyType', 'User story issue type', 'Story', 'Usually "Story" in Jira.'],
+      ],
+    },
+    ado: {
+      name: 'Azure DevOps', icon: '🔷',
+      fields: [
+        ['org', 'Organization address', 'https://dev.azure.com/yourorg', 'Your Azure DevOps organization.'],
+        ['token', 'Personal access token', 'Paste the token', 'User settings → Personal access tokens → New token, with "Work Items: Read & write". Stored encrypted on this server and never shown again.'],
+        ['project', 'Project', 'Online Shop', 'The project name as shown in Azure DevOps.'],
+        ['bugType', 'Bug work item type', 'Bug', 'Usually "Bug" (the Basic process uses "Issue").'],
+        ['storyType', 'User story work item type', 'User Story', '"User Story" (Agile), "Product Backlog Item" (Scrum), "Requirement" (CMMI) or "Issue" (Basic).'],
+      ],
+    },
+  };
+
+  async function renderConnections() {
+    const box = $('connections');
+    if (!box) return;
+    let summary;
+    try { summary = await get('/integrations'); } catch (e) { box.replaceChildren(el('div', { class: 'err', text: e.message })); return; }
+    box.replaceChildren(
+      el('div', { class: 'hero', style: 'padding-bottom:0' }, el('h1', { style: 'font-size:26px', text: 'Connections' }),
+        el('p', { text: 'Connect Jira or Azure DevOps once, and every tester can file a bug there from the report, linked to a user story if they like. EasyTesting then shows each ticket\'s status and adds the re-test result to it as a comment.' })),
+      el('div', { class: 'conns' }, ...Object.entries(TOOLS).map(([tool, t]) => connectionCard(tool, t, summary[tool]))));
+  }
+
+  function connectionCard(tool, t, now) {
+    const inputs = {};
+    const msg = el('div', { class: 'hint' });
+    const err = el('div', { class: 'err' });
+    const body = el('div', { class: 'connform' + (now.connected ? ' hidden' : '') }, ...t.fields.map(([k, label, ph, hint]) => {
+      const i = el('input', { type: k === 'token' ? 'password' : 'text', placeholder: k === 'token' && now.connected ? 'Leave blank to keep the saved token' : ph, autocomplete: 'off' });
+      if (now.connected && k !== 'token') i.value = { site: now.where, org: now.where, project: now.project, bugType: now.bugType, storyType: now.storyType }[k] || '';
+      inputs[k] = i;
+      return field(label, i, hint);
+    }));
+    const values = () => Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.value.trim()]));
+    const busy = async (btn, label, fn) => {
+      err.textContent = ''; msg.textContent = '';
+      const was = btn.textContent; btn.disabled = true; btn.textContent = label;
+      try { await fn(); } catch (e) { err.textContent = e.message; }
+      btn.disabled = false; btn.textContent = was;
+    };
+    const testBtn = el('button', { class: 'btn', text: 'Test connection', onclick: (e) => busy(e.target, 'Testing…', async () => { msg.textContent = '✔ ' + (await send(`/integrations/${tool}/test`, values())).message; }) });
+    const saveBtn = el('button', { class: 'btn primary', text: now.connected ? 'Save changes' : 'Connect', onclick: (e) => busy(e.target, 'Checking…', async () => {
+      const out = await send(`/integrations/${tool}`, values(), 'PUT');
+      toast(out.message); renderConnections();
+    }) });
+    const removeBtn = now.connected ? el('button', { class: 'btn danger', text: 'Disconnect', onclick: async () => {
+      if (!confirm(`Disconnect ${t.name}? Tickets already filed stay linked, but no new ones can be filed and their status stops updating.`)) return;
+      try { await send(`/integrations/${tool}`, {}, 'DELETE'); renderConnections(); } catch (e) { fail(e); }
+    } }) : null;
+    const edit = now.connected ? el('button', { class: 'btn', text: 'Change settings', onclick: (e) => { body.classList.remove('hidden'); actions.classList.remove('hidden'); e.target.remove(); } }) : null;
+    const actions = el('div', { class: 'cta' + (now.connected ? ' hidden' : '') }, saveBtn, testBtn);
+    return el('section', { class: 'card conn' },
+      el('div', { class: 'gaphead' }, el('h2', { style: 'margin:0', text: `${t.icon} ${t.name}` }),
+        el('span', { class: 'badge b-' + (now.connected ? 'ok' : 'mute'), text: now.connected ? 'Connected' : 'Not connected' })),
+      now.connected ? el('p', { class: 'hint', text: `Project ${now.project} at ${now.where}. Bugs are filed as "${now.bugType}" and can be linked to a "${now.storyType}".` }) : null,
+      body, actions, el('div', { class: 'row' }, edit, removeBtn), msg, err);
   }
 })();
