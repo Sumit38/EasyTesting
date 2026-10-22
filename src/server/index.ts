@@ -14,6 +14,8 @@ import { Auth, AuthError, clearCookie, cookie, COOKIE, sessionCookie, type User 
 import { blockedReason } from '../exec/guard.js';
 import { decodeText } from '../cases/decode.js';
 import { IntegrationError, Integrations, type Tool } from './integrations.js';
+import { cleanReport, Mobile } from './mobile.js';
+import { ApkError } from '../mobile/apk.js';
 import { DEMO_TEST_DATA, DEMO_USE_CASE, demoPage } from './demo.js';
 import { RunManager, type Framework } from './runs.js';
 
@@ -98,6 +100,9 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
   const auth = new Auth(runs.app.db);
   const suites = new SuiteStore(runs.app.db);
   const integrations = new Integrations(runs.app.db, opts.dataDir ?? '.heal-server', opts.integrationFetch);
+  const mobile = new Mobile(runs.app.db, opts.dataDir ?? '.heal-server');
+  /** Pairing attempts per address in the last minute: a code is short, so guessing must be slow. */
+  const pairTries = new Map<string, number[]>();
   // When a re-test decides a filed bug's fate, say so on its ticket.
   runs.onReconciled = (run, bugs) => {
     for (const b of bugs) {
@@ -152,6 +157,36 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
       const me = opts.accounts ? auth.fromRequest(req) : SYSTEM;
       return json(res, 200, { accounts: !!opts.accounts, setup: !!opts.accounts && auth.userCount() === 0, user: me ?? null, codeUploads, signup: !!opts.accounts && !!opts.allowSignup });
     }
+    // ---- the EasyTesting Agent on a tester's computer: it signs in with its own key, not a browser cookie ----
+    if (path.startsWith('/api/agent/')) {
+      const agentToken = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+      if (path === '/api/agent/pair' && method === 'POST') {
+        const recent = (pairTries.get(ip) ?? []).filter((t) => Date.now() - t < 60_000);
+        if (recent.length >= 10) throw httpError(429, 'Too many tries. Wait a minute and run the agent again.');
+        pairTries.set(ip, [...recent, Date.now()]);
+        const b = JSON.parse((await readBody(req, 2_000)).toString() || '{}');
+        const paired = mobile.pair(String(b.code ?? ''));
+        if (!paired) throw httpError(401, 'That code is wrong or has expired. Get a new one on the Mobile page and run the command again.');
+        return json(res, 200, { token: paired.token });
+      }
+      const agentOwner = mobile.agentOwner(agentToken);
+      if (agentOwner === undefined) throw httpError(401, 'This agent is not connected. Get a new code on the Mobile page.');
+      if (path === '/api/agent/report' && method === 'POST') {
+        mobile.saveReport(agentToken, cleanReport(JSON.parse((await readBody(req, 200_000)).toString() || '{}')));
+        // The apps this person uploaded, so the agent can keep a copy on their computer for Appium.
+        return json(res, 200, { apps: mobile.apps(agentOwner).map((a) => ({ id: a.id, package: a.package, versionName: a.versionName, sha256: a.sha256, filename: a.filename })) });
+      }
+      const ap = path.match(/^\/api\/agent\/apps\/(\d+)\/apk$/);
+      if (ap && method === 'GET') {
+        const app = mobile.app(Number(ap[1]));
+        const bytes = app && app.owner === agentOwner ? mobile.apkBytes(app.id) : undefined;
+        if (!bytes) throw httpError(404, 'No such app.');
+        res.writeHead(200, { 'content-type': 'application/vnd.android.package-archive', 'content-length': String(bytes.length) });
+        return res.end(bytes);
+      }
+      throw httpError(404, 'Not found.');
+    }
+
     if (opts.accounts) {
       // The cookie is SameSite=Strict; this also refuses any state-changing request (sign-in and sign-out included) that names another site as its origin.
       const origin = req.headers.origin;
@@ -478,6 +513,29 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
         return res.end(zip);
       }
     }
+    // ---- Android apps and the agent on the tester's computer -----------------------------
+    if (path === '/api/mobile/apps' && method === 'GET') return json(res, 200, mobile.apps(isAdmin ? undefined : me.id));
+    if (path === '/api/mobile/apps' && method === 'POST') {
+      const filename = url.searchParams.get('filename') ?? 'app.apk';
+      const bytes = await readBody(req, Math.max(maxUpload, 300 * 1024 * 1024));
+      if (!bytes.length) throw httpError(400, 'The file is empty.');
+      try {
+        return json(res, 201, mobile.addApp(me.id, filename, new Uint8Array(bytes)));
+      } catch (e) {
+        if (e instanceof ApkError) throw httpError(400, e.message);
+        throw e;
+      }
+    }
+    const ma = path.match(/^\/api\/mobile\/apps\/(\d+)$/);
+    if (ma && method === 'DELETE') {
+      const app = mobile.app(Number(ma[1]));
+      if (!app || !(isAdmin || app.owner === me.id)) throw httpError(404, 'No such app.');
+      return json(res, 200, { deleted: mobile.deleteApp(app.id) });
+    }
+    if (path === '/api/mobile/pair' && method === 'POST') return json(res, 201, mobile.pairingCode(me.id));
+    if (path === '/api/mobile/agent' && method === 'GET') return json(res, 200, mobile.latest(me.id) ?? null);
+    if (path === '/api/mobile/agent' && method === 'DELETE') return json(res, 200, { forgotten: mobile.forgetAgents(me.id) });
+
     // ---- Jira and Azure DevOps ------------------------------------------------------
     const ig = path.match(/^\/api\/integrations(?:\/(jira|ado))?(?:\/(test|stories))?$/);
     if (ig) {
@@ -629,6 +687,11 @@ function serveStatic(res: ServerResponse, path: string) {
     '/index.html': ['index.html', 'text/html; charset=utf-8'],
     '/cases.js': ['cases.js', 'text/javascript; charset=utf-8'],
   };
+  if (path === '/agent/easytesting-agent.mjs') {
+    // The agent testers run on their own computer. Plain JavaScript with no dependencies: Node.js is all it needs.
+    res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'content-disposition': 'attachment; filename="easytesting-agent.mjs"', 'cache-control': 'no-cache' });
+    return void createReadStream(join(HERE, 'public', 'easytesting-agent.mjs')).pipe(res);
+  }
   const hit = files[path];
   if (!hit) return json(res, 404, { error: 'Not found.' });
   res.writeHead(200, { 'content-type': hit[1], 'cache-control': 'no-cache' });

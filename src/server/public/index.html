@@ -284,6 +284,24 @@
   .stepres .sub { grid-column: 2 / 4; font-size: 12px; color: var(--muted); } .stepres .err { grid-column: 2 / 4; color: var(--bad); font-size: 13px; margin: 0; min-height: 0; }
   .gaps { background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--warn); border-radius: 14px; box-shadow: var(--shadow); padding: 16px 20px; margin-top: 16px; display: grid; gap: 12px; }
   .gapstitle h3 { margin: 0 0 2px; }
+  /* Mobile setup */
+  .apps { display: grid; gap: 8px; margin-top: 12px; }
+  .appcard { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; background: var(--panel-2); cursor: pointer; }
+  .appcard.on { border-color: var(--brand); background: var(--brand-soft); } .appcard b { overflow-wrap: anywhere; }
+  .mradios { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 10px; }
+  .pairing { margin-top: 12px; border: 1px dashed var(--line); border-radius: 12px; padding: 12px 16px; background: var(--panel-2); }
+  .pairing .code { font: 700 20px/1 ui-monospace, Consolas, monospace; letter-spacing: .08em; }
+  .stepitem { border: 1px solid var(--line); border-radius: 12px; margin-top: 8px; background: var(--panel); }
+  .stepitem > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 10px 14px; }
+  .stepitem > summary::-webkit-details-marker { display: none; }
+  .stepitem > summary .hint { min-width: 0; overflow-wrap: anywhere; }
+  .stepitem .ic { width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-weight: 800; font-size: 13px; background: var(--line); color: var(--muted); flex: none; }
+  .stepitem.ok .ic { background: var(--ok-soft); color: var(--ok); } .stepitem.bad .ic { background: var(--bad-soft); color: var(--bad); }
+  .stepitem.bad { border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); }
+  .howto p { margin: 6px 0; font-size: 14px; } .howto .cmd { display: flex; gap: 8px; align-items: center; background: var(--code); border-radius: 8px; padding: 6px 8px; margin: 6px 0; }
+  .howto .cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: pre; font: 13px ui-monospace, Consolas, monospace; }
+  .capsbox { position: relative; } .capsbox pre { background: var(--code); border-radius: 10px; padding: 12px 14px; overflow-x: auto; font: 13px/1.5 ui-monospace, Consolas, monospace; margin: 10px 0; }
+  ol.steps { padding-left: 20px; display: grid; gap: 4px; }
   .analysis { background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--brand); border-radius: 14px; box-shadow: var(--shadow); padding: 14px 20px; margin-top: 12px; }
   .analysis h3 { margin: 0; } .analysis p { margin: 6px 0 8px; } .analysis ul { margin: 8px 0 0; padding-left: 20px; color: var(--muted); font-size: 13.5px; display: grid; gap: 4px; }
   .gap { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; min-width: 0; }
@@ -344,7 +362,7 @@
     <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="etg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--brand)"/><stop offset="1" stop-color="#0d8f8a"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#etg)"/><path d="M9 16.5l4.8 4.8L23 10" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
     EasyTesting
   </a>
-  <nav class="nav"><a href="#/" data-nav="home">Home</a><a href="#/usecases" data-nav="usecases">Use cases</a><a href="#/cases" data-nav="cases">Test cases</a><a href="#/code" data-nav="code">Test code</a><a href="#/runs" data-nav="runs">Runs</a><a href="#/report" data-nav="report">Report</a><a href="#/team" data-nav="team" id="nav-team" class="hidden">Team</a></nav>
+  <nav class="nav"><a href="#/" data-nav="home">Home</a><a href="#/usecases" data-nav="usecases">Use cases</a><a href="#/cases" data-nav="cases">Test cases</a><a href="#/code" data-nav="code">Test code</a><a href="#/mobile" data-nav="mobile">Mobile</a><a href="#/runs" data-nav="runs">Runs</a><a href="#/report" data-nav="report">Report</a><a href="#/team" data-nav="team" id="nav-team" class="hidden">Team</a></nav>
   <span class="spacer"></span>
   <span id="userChip"></span>
   <button class="icon-btn" id="theme" title="Switch light / dark" aria-label="Switch light or dark theme">◐</button>
@@ -507,6 +525,7 @@
 <div id="view-import" data-view class="hidden"></div>
 <div id="view-suite" data-view class="hidden"></div>
 <div id="view-team" data-view class="hidden"></div>
+<div id="view-mobile" data-view class="hidden"></div>
 
 </main>
 <div id="auth" class="auth hidden"></div>

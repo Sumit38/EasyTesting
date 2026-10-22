@@ -123,6 +123,7 @@
       if (h === 'cases') { showView('view-cases'); setNav('cases'); await renderCases(); return true; }
       if (h === 'cases/new') { showView('view-import'); setNav('cases'); renderImport(); return true; }
       if (h === 'team') { showView('view-team'); setNav('team'); await renderTeam(); return true; }
+      if (h === 'mobile') { showView('view-mobile'); setNav('mobile'); await renderMobile(); return true; }
       const m = h.match(/^suite\/(\d+)$/);
       if (m) { showView('view-suite'); setNav('cases'); await renderSuite(m[1]); return true; }
     } catch (e) { fail(e); }
@@ -861,6 +862,195 @@
       el('div', { id: 'connections' }));
     renderConnections();
   }
+
+  /* ---------- Mobile: an Android app, set up step by step with the agent on the tester's computer ---------- */
+  const M = { appId: null, device: null, os: null, code: null, agent: undefined, polled: 0, opened: new Set() };
+  try { M.device = localStorage.getItem('et-m-device'); M.appId = Number(localStorage.getItem('et-m-app')) || null; } catch { /* storage blocked */ }
+  const guessOs = () => (/Mac/i.test(navigator.platform) ? 'mac' : /Linux/i.test(navigator.platform) ? 'linux' : 'windows');
+  const OS_NAME = { windows: 'Windows', mac: 'Mac', linux: 'Linux' };
+
+  /** How to install or fix each thing, per system. Commands are shown in boxes with a Copy button. */
+  const HOWTO = {
+    node: {
+      windows: ['Download the LTS installer from nodejs.org and run it with the default options.', 'Open a new PowerShell window and check:', '$ node --version'],
+      mac: ['Install it from nodejs.org, or with Homebrew:', '$ brew install node', '$ node --version'],
+      linux: ['Install Node.js 18 or newer from nodejs.org (or your distribution, if it is new enough):', '$ node --version'],
+    },
+    java: {
+      windows: ['Install Eclipse Temurin JDK 17 from adoptium.net. In the installer, turn on "Set JAVA_HOME variable".', 'Open a new PowerShell window and check:', '$ java -version'],
+      mac: ['$ brew install --cask temurin@17', '$ java -version'],
+      linux: ['$ sudo apt install openjdk-17-jdk', '$ java -version'],
+    },
+    'android-sdk': {
+      windows: ['Install Android Studio from developer.android.com/studio. Open it once and finish the setup wizard: it downloads the Android SDK.', 'Then tell other programs where the SDK is (run in PowerShell, then open a new window):', "$ [Environment]::SetEnvironmentVariable('ANDROID_HOME', \"$env:LOCALAPPDATA\\Android\\Sdk\", 'User')"],
+      mac: ['Install Android Studio from developer.android.com/studio and finish its setup wizard. Then:', "$ echo 'export ANDROID_HOME=$HOME/Library/Android/sdk' >> ~/.zshrc", 'Open a new Terminal window.'],
+      linux: ['Install Android Studio from developer.android.com/studio and finish its setup wizard. Then:', "$ echo 'export ANDROID_HOME=$HOME/Android/Sdk' >> ~/.bashrc", 'Open a new terminal.'],
+    },
+    adb: {
+      windows: ['In Android Studio: More Actions → SDK Manager → SDK Tools → tick "Android SDK Platform-Tools" → Apply.', 'Put it on the PATH (PowerShell, then open a new window):', "$ $p = [Environment]::GetEnvironmentVariable('Path', 'User'); [Environment]::SetEnvironmentVariable('Path', \"$p;$env:LOCALAPPDATA\\Android\\Sdk\\platform-tools\", 'User')", '$ adb version'],
+      mac: ['In Android Studio: SDK Manager → SDK Tools → "Android SDK Platform-Tools". Then:', "$ echo 'export PATH=$PATH:$ANDROID_HOME/platform-tools' >> ~/.zshrc", '$ adb version'],
+      linux: ['In Android Studio: SDK Manager → SDK Tools → "Android SDK Platform-Tools". Then:', "$ echo 'export PATH=$PATH:$ANDROID_HOME/platform-tools' >> ~/.bashrc", '$ adb version'],
+    },
+    'device-phone': {
+      all: ['On the phone: Settings → About phone → tap "Build number" 7 times, until it says you are a developer.', 'Settings → System → Developer options → turn on "USB debugging".', 'Connect the phone with a USB cable that carries data (some cables only charge).', 'Unlock the phone and tap "Allow" on "Allow USB debugging?". Tick "Always allow from this computer".', 'Check that it is listed as "device":', '$ adb devices'],
+      windows: ['If the phone is not listed at all, Windows needs its USB driver: for Pixel phones install "Google USB Driver" from Android Studio\'s SDK Manager; for Samsung, Xiaomi, OnePlus and others, get the driver from the maker\'s website.'],
+    },
+    'device-emulator': {
+      all: ['In Android Studio: More Actions → Virtual Device Manager → Create device → pick a phone (for example Pixel 7) → pick a system image (API 34, click the download arrow) → Finish.', 'Start it with ▶ in the Device Manager, or from a terminal (the names of your emulators are listed below):', '$ emulator -avd NAME', 'Wait until the phone\'s home screen shows, then check:', '$ adb devices'],
+    },
+    appium: { all: ['$ npm install -g appium', '$ appium --version'] },
+    uiautomator2: { all: ['$ appium driver install uiautomator2', '$ appium driver list --installed'] },
+    'appium-server': { all: ['Open a new terminal window, start Appium, and keep the window open while you test:', '$ appium', 'It is ready when it says "Appium REST http interface listener started on http://0.0.0.0:4723".'] },
+    inspector: {
+      all: ['Download Appium Inspector from github.com/appium/appium-inspector/releases and install it.'],
+      windows: ['Pick the file ending in "win.exe".'], mac: ['Pick the file ending in ".dmg". If macOS says it cannot check the app, right-click it in Applications → Open.'], linux: ['Pick the ".AppImage" file and make it executable.'],
+    },
+  };
+  const STEPS = [
+    ['node', 'Node.js', 'Runs Appium and the EasyTesting Agent.'],
+    ['java', 'Java (JDK 17)', 'Appium\'s Android driver needs it.'],
+    ['android-sdk', 'Android SDK', 'Google\'s tools for Android, from Android Studio.'],
+    ['adb', 'ADB', 'Android Debug Bridge: how the computer talks to the phone.'],
+    ['device', 'Phone or emulator', 'Where your app will run.'],
+    ['appium', 'Appium 2', 'Drives the app, like Playwright drives a browser.'],
+    ['uiautomator2', 'Appium Android driver', 'UiAutomator2: Appium\'s driver for Android.'],
+    ['appium-server', 'Appium server', 'Must be running while you test.'],
+    ['inspector', 'Appium Inspector', 'Recommended: shows the elements of each screen, so you can name them in your steps.'],
+  ];
+  const REQUIRED = ['node', 'java', 'android-sdk', 'adb', 'device', 'appium', 'uiautomator2', 'appium-server'];
+
+  /** A list of instructions: lines starting with "$ " are commands, shown in a box you can copy. */
+  const howTo = (lines) => el('div', { class: 'howto' }, ...lines.map((l) => (l.startsWith('$ ')
+    ? el('div', { class: 'cmd' }, el('code', { text: l.slice(2) }), el('button', { class: 'mini', text: 'Copy', onclick: (e) => { navigator.clipboard.writeText(l.slice(2)).then(() => { e.target.textContent = 'Copied'; setTimeout(() => (e.target.textContent = 'Copy'), 1500); }); } }))
+    : el('p', { text: l }))));
+
+  async function renderMobile() {
+    const box = $('view-mobile');
+    let apps = [];
+    try { [apps, M.agent] = await Promise.all([get('/mobile/apps'), get('/mobile/agent')]); } catch (e) { fail(e); }
+    if (!apps.some((a) => a.id === M.appId)) M.appId = apps[0] ? apps[0].id : null;
+    const app = apps.find((a) => a.id === M.appId);
+    const rep = M.agent && M.agent.report;
+    const os = M.os || (rep && rep.os) || guessOs();
+    const check = (id) => (rep ? rep.checks.find((c) => c.id === id) : undefined);
+
+    // 1. The app
+    const file = el('input', { type: 'file', accept: '.apk', class: 'hidden', onchange: async () => {
+      const f = file.files[0]; if (!f) return;
+      drop.classList.add('has'); drop.querySelector('b').textContent = 'Reading ' + f.name + '…';
+      try {
+        const out = await api('/mobile/apps?filename=' + encodeURIComponent(f.name), { method: 'POST', body: f }).then(parse);
+        M.appId = out.id; try { localStorage.setItem('et-m-app', String(out.id)); } catch { /* */ }
+        toast(`${out.package} ${out.versionName || ''} uploaded.`); renderMobile();
+      } catch (e) { fail(e); renderMobile(); }
+    } });
+    const drop = el('div', { class: 'drop', tabindex: 0, role: 'button', onclick: () => file.click() }, el('div', { class: 'big', text: '📱' }), el('div', {}, el('b', { text: 'Drop your .apk here, or click to choose it' })), el('div', { text: 'The Android app to test. A debug or release build both work.' }));
+    drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+    drop.ondragleave = () => drop.classList.remove('over');
+    drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) { const dt = new DataTransfer(); dt.items.add(e.dataTransfer.files[0]); file.files = dt.files; file.onchange(); } };
+    const appList = apps.length ? el('div', { class: 'apps' }, ...apps.map((a) => el('label', { class: 'appcard' + (a.id === M.appId ? ' on' : '') },
+      el('input', { type: 'radio', name: 'mapp', checked: a.id === M.appId, onchange: () => { M.appId = a.id; try { localStorage.setItem('et-m-app', String(a.id)); } catch { /* */ } renderMobile(); } }),
+      el('div', {}, el('b', { text: a.filename }), el('div', { class: 'hint', text: `${a.package} · version ${a.versionName || '?'} (${a.versionCode || '?'}) · ${size(a.size)}` }),
+        el('div', { class: 'hint', text: a.launchActivity ? `Starts at ${a.launchActivity}` : 'No start screen found: the app has no launcher activity.' })),
+      el('button', { class: 'mini', text: 'Delete', onclick: async (e) => { e.preventDefault(); if (!confirm('Delete ' + a.filename + '?')) return; await api('/mobile/apps/' + a.id, { method: 'DELETE' }); renderMobile(); } })))) : null;
+
+    // 2. Where it runs
+    const devRadio = (v, title, sub) => el('label', { class: 'radio' + (M.device === v ? ' on' : '') },
+      el('input', { type: 'radio', name: 'mdev', checked: M.device === v, onchange: () => { M.device = v; try { localStorage.setItem('et-m-device', v); } catch { /* */ } renderMobile(); } }),
+      el('div', {}, el('b', { text: title }), el('span', { text: sub })));
+
+    // 3. The agent
+    const site = location.origin;
+    const online = M.agent && M.agent.online;
+    const agentState = !M.agent ? el('span', { class: 'badge b-mute', text: M.code ? 'Waiting for the agent…' : 'Not connected' })
+      : el('span', { class: 'badge b-' + (online ? 'ok' : 'warn'), text: online ? `Connected: ${rep.host} (${OS_NAME[rep.os]})` : `Last seen ${when(M.agent.lastSeen)}: start the agent again` });
+    const pairBtn = el('button', { class: 'btn primary', text: M.agent ? 'Connect another computer' : 'Get a pairing code', onclick: async () => { try { M.code = await send('/mobile/pair', {}); renderMobile(); } catch (e) { fail(e); } } });
+    const pairing = M.code ? el('div', { class: 'pairing' },
+      el('p', {}, 'Your code: ', el('b', { class: 'code', text: M.code.code }), el('span', { class: 'hint', text: ` (works once, for 10 minutes)` })),
+      el('ol', {},
+        el('li', {}, 'Download the agent: ', el('a', { href: '/agent/easytesting-agent.mjs', download: 'easytesting-agent.mjs', text: 'easytesting-agent.mjs' }), ' (it needs Node.js, step 1 below).'),
+        el('li', { text: `Open ${os === 'windows' ? 'PowerShell' : 'a terminal'} and run:` })),
+      howTo([`$ ${os === 'windows' ? 'node "$env:USERPROFILE\\Downloads\\easytesting-agent.mjs"' : 'node ~/Downloads/easytesting-agent.mjs'} ${site} ${M.code.code}`]),
+      el('p', { class: 'hint', text: 'Keep that window open. The checklist below fills in by itself. Next time you only need the command without the code.' })) : null;
+
+    // 4. Checklist
+    const osTabs = el('div', { class: 'seg' }, ...['windows', 'mac', 'linux'].map((o) => el('button', { class: o === os ? 'on' : '', text: OS_NAME[o], onclick: () => { M.os = o; renderMobile(); } })));
+    const items = STEPS.map(([id, title, why]) => {
+      const c = check(id);
+      const ok = c ? c.ok : null;
+      const key = id === 'device' ? (M.device === 'emulator' ? 'device-emulator' : 'device-phone') : id;
+      const lines = [...(HOWTO[key].all || []), ...(HOWTO[key][os] || [])];
+      const extra = id === 'device' && M.device === 'emulator' && rep && rep.avds.length ? el('p', { class: 'hint', text: 'Your emulators: ' + rep.avds.join(', ') }) : null;
+      const d = el('details', { class: 'stepitem ' + (ok === true ? 'ok' : ok === false ? 'bad' : 'unk') });
+      d.dataset.id = id;
+      d.ontoggle = () => (d.open ? M.opened.add(id) : M.opened.delete(id));
+      d.open = M.opened.has(id) || ok === false && !STEPS.slice(0, STEPS.findIndex((s) => s[0] === id)).some(([pid]) => { const pc = check(pid); return pc && pc.ok === false && REQUIRED.includes(pid); });
+      d.append(el('summary', {}, el('span', { class: 'ic', text: ok === true ? '✔' : ok === false ? '✖' : '?' }), el('b', { text: title }),
+        el('span', { class: 'hint', text: c ? c.detail : why }), el('span', { class: 'spacer' }), REQUIRED.includes(id) ? null : el('span', { class: 'pill', text: 'recommended' })),
+        el('div', { class: 'body2' }, el('p', { class: 'hint', text: why }), howTo(lines), extra));
+      return d;
+    });
+    const missing = rep ? REQUIRED.filter((id) => { const c = check(id); return !c || c.ok !== true; }) : REQUIRED;
+    const ready = rep && online && missing.length === 0;
+
+    // 5. Appium Inspector settings for this app and device
+    const devs = rep ? rep.devices.filter((x) => x.state === 'device') : [];
+    const dev = devs.find((x) => (M.device === 'emulator' ? x.emulator : !x.emulator)) || devs[0];
+    const caps = app ? {
+      platformName: 'Android',
+      'appium:automationName': 'UiAutomator2',
+      ...(dev ? { 'appium:udid': dev.serial } : {}),
+      'appium:deviceName': dev ? dev.model || dev.serial : 'Android',
+      'appium:app': (rep && rep.apps && rep.apps[String(app.id)]) || 'PATH-TO-THE-APK-ON-THIS-COMPUTER',
+      'appium:appPackage': app.package,
+      ...(app.launchActivity ? { 'appium:appActivity': app.launchActivity } : {}),
+      'appium:autoGrantPermissions': true,
+      'appium:newCommandTimeout': 300,
+    } : null;
+    const capsText = caps ? JSON.stringify(caps, null, 2) : '';
+
+    box.replaceChildren(
+      el('div', { class: 'hero' }, el('h1', {}, 'Test an Android app. ', el('em', { text: 'We guide you through the setup.' })),
+        el('p', { text: 'Upload the APK, connect your phone or an emulator, and follow the checklist. Every item is checked on your computer by the EasyTesting Agent, so nothing is assumed.' })),
+      el('section', { class: 'card' }, el('h2', {}, el('span', { class: 'n', text: '1' }), 'Your app'),
+        el('div', { class: 'body' }, drop, file, appList)),
+      el('section', { class: 'card' }, el('h2', {}, el('span', { class: 'n', text: '2' }), 'Where will it run?'),
+        el('div', { class: 'body' }, el('div', { class: 'radios mradios' },
+          devRadio('phone', 'A real phone, by USB', 'The most realistic. You need the phone and a USB data cable.'),
+          devRadio('emulator', 'An emulator on this computer', 'A virtual phone from Android Studio. No phone needed.')))),
+      el('section', { class: 'card' }, el('h2', {}, el('span', { class: 'n', text: '3' }), 'Connect this computer'),
+        el('div', { class: 'body' },
+          el('p', { text: 'Your browser cannot see what is installed on your computer or which phone is plugged in. The EasyTesting Agent, a small program you run on the computer the phone or emulator is on, checks it for real and shows the result here. It only runs these checks; it never runs anything this site sends it.' }),
+          el('div', { class: 'row' }, agentState, el('span', { class: 'spacer' }), pairBtn, M.agent ? el('button', { class: 'btn', text: 'Disconnect agents', onclick: async () => { await send('/mobile/agent', {}, 'DELETE'); M.agent = undefined; M.code = null; renderMobile(); } }) : null),
+          pairing)),
+      el('section', { class: 'card' }, el('div', { class: 'gaphead' }, el('h2', {}, el('span', { class: 'n', text: '4' }), 'Set up, step by step'), el('span', { class: 'spacer' }), osTabs),
+        el('div', { class: 'body' },
+          el('p', { class: 'hint', text: rep ? (ready ? 'Everything needed is in place.' : `${missing.length} thing${missing.length === 1 ? '' : 's'} left to set up. Open an item with ✖ for what to do; it turns ✔ by itself once done.`) : 'Connect the agent (step 3) and each item is checked automatically. You can already install what you know is missing.' }),
+          !M.device ? el('div', { class: 'note', text: 'Choose in step 2 whether you use a phone or an emulator, to see the right instructions for it.' }) : null,
+          ...items)),
+      el('section', { class: 'card' }, el('h2', {}, el('span', { class: 'n', text: '5' }), 'Look at your app with Appium Inspector'),
+        el('div', { class: 'body' }, !app ? el('p', { class: 'hint', text: 'Upload your APK in step 1 first.' }) : el('div', {},
+          el('ol', { class: 'steps' },
+            el('li', { text: 'Make sure the Appium server is running (step 4) and your phone or emulator is connected.' }),
+            el('li', { text: 'Open Appium Inspector. Set Remote Host 127.0.0.1, Remote Port 4723, Remote Path /.' }),
+            el('li', { text: 'Under "Desired Capabilities" click the pencil next to "JSON Representation", paste the settings below, click Save, then Start Session.' }),
+            el('li', { text: 'Your app opens on the device and its screen shows in Inspector. Click any element: use its "text", "content-desc" or "resource-id" as its name in your test steps, for example Tap "Sign in".' })),
+          el('div', { class: 'capsbox' }, el('pre', { text: capsText }), el('button', { class: 'btn', text: 'Copy settings', onclick: (e) => navigator.clipboard.writeText(capsText).then(() => { e.target.textContent = 'Copied'; setTimeout(() => (e.target.textContent = 'Copy settings'), 1500); }) })),
+          !dev ? el('p', { class: 'hint', text: 'No device is connected yet, so "udid" is left out. Connect one and the settings fill it in.' }) : null,
+          caps['appium:app'].startsWith('PATH-') ? el('p', { class: 'hint', text: 'When the agent is connected it saves your APK to ~/EasyTesting/apps and puts its real path here.' }) : null))),
+      el('section', { class: 'card' }, el('h2', {}, el('span', { class: 'n', text: '6' }), 'Run your test cases on the device'),
+        el('div', { class: 'body' },
+          el('div', { class: 'note' + (ready ? ' good' : '') }, ready ? 'Your computer is ready. Running your test cases on the device, with self-healing, pictures and reports, is the next stage we are building.' : 'Finish the checklist above first. Running your test cases on the device, with self-healing, pictures and reports, is the next stage we are building.'))));
+  }
+
+  // While the Mobile page is open, refresh the agent's checklist every few seconds.
+  Ext.tick.push(() => {
+    if ($('view-mobile').classList.contains('hidden') || Date.now() - M.polled < 4000) return;
+    M.polled = Date.now();
+    // Redraw only when something a person would see changed: not for every report's new time stamp.
+    const sig = (a) => JSON.stringify(a ? [a.online, a.report.os, a.report.host, a.report.checks, a.report.devices, a.report.avds, a.report.apps] : null);
+    get('/mobile/agent').then((a) => { if (sig(a) !== sig(M.agent)) renderMobile(); else M.agent = a; }).catch(() => undefined);
+  });
 
   /* ---------- Jira and Azure DevOps: set up once by an admin, used by everyone to file bugs ---------- */
   const TOOLS = {
