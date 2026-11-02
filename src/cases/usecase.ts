@@ -8,15 +8,19 @@ export interface UseCase {
   alternates: string[];
   rules: string[];
   postconditions: string[];
+  /** Functional requirements ("FR1: The system shall ..."): each one is traced to a test case. */
+  requirements: string[];
+  /** Non-functional requirements: speed, security, usability, accessibility, compatibility, reliability. */
+  nonFunctional: string[];
   /** Given / When / Then scenarios from acceptance criteria. */
   scenarios: { name: string; given: string[]; when: string[]; then: string[] }[];
 }
 
-type Section = 'title' | 'actor' | 'pre' | 'main' | 'alt' | 'rules' | 'post' | 'accept' | 'description' | 'skip';
+type Section = 'title' | 'actor' | 'pre' | 'main' | 'alt' | 'rules' | 'func' | 'nfr' | 'post' | 'accept' | 'description' | 'skip';
 
 const HEADINGS: [RegExp, Section][] = [
   // Document details and sections that describe the use case rather than what to do in the app.
-  [/^(?:use ?case\s+)?(?:id|no\.?|number|#|ref(?:erence)?|version|author|owner|prepared by|reviewed by|approved by|date|created(?: on| by)?|last (?:updated|modified)|revision(?: history)?|status|level|scope|priority|frequency(?: of use)?|stakeholders?(?: and interests)?|secondary actors?|supporting actors?|other actors?|trigger|triggers|includes|extends|related use cases?|references?|glossary|notes?|open issues|issues|special requirements|non-functional requirements|technology(?: and data)? variations|document (?:id|version|title|history|control|information)|table of contents|contents|change log|sign-?off|approvals?)\b\s*(?:[:\-–]\s*(.*))?$/i, 'skip'],
+  [/^(?:use ?case\s+)?(?:id|no\.?|number|#|ref(?:erence)?|version|author|owner|prepared by|reviewed by|approved by|date|created(?: on| by)?|last (?:updated|modified)|revision(?: history)?|status|level|scope|priority|frequency(?: of use)?|stakeholders?(?: and interests)?|secondary actors?|supporting actors?|other actors?|trigger|triggers|includes|extends|related use cases?|references?|glossary|notes?|open issues|issues|technology(?: and data)? variations|document (?:id|version|title|history|control|information)|table of contents|contents|change log|sign-?off|approvals?)\b\s*(?:[:\-–]\s*(.*))?$/i, 'skip'],
   [/^(?:use ?case|uc|user story|story|feature|scenario)\b[\s\w#.-]*?[:\-–]\s*(.*)$/i, 'title'],
   [/^(?:primary\s+|main\s+)?actors?\s*[:\-–]\s*(.*)$/i, 'actor'],
   [/^(?:as an?|as the)\s+(.+?)(?:,|\s+i\s+(?:want|can|need|would))/i, 'actor'],
@@ -25,11 +29,16 @@ const HEADINGS: [RegExp, Section][] = [
   [/^(?:main|basic|normal|happy|primary|success)(?:\s+success)?(?:\s+(?:flow|scenario|path|course))?(?:\s+of events)?\s*[:\-–]?\s*(.*)$/i, 'main'],
   [/^(?:steps?|flow(?: of events)?|procedure|description of flow)\s*[:\-–]?\s*(.*)$/i, 'main'],
   [/^(?:alternate|alternative|alt|exception|exceptional|extension|error|failure|negative)s?(?:\s+(?:flows?|scenarios?|paths?|courses?|cases?))?\s*[:\-–]?\s*(.*)$/i, 'alt'],
-  [/^(?:business\s+)?(?:rules?|constraints?|validations?|validation rules?|requirements?|non-functional)\s*[:\-–]?\s*(.*)$/i, 'rules'],
+  [/^(?:non-?\s?functional(?:\s+requirements?)?|nfrs?|quality\s+(?:attributes|requirements)|special\s+requirements|(?:performance|security|usability|accessibility|reliability|availability|compatibility|scalability)(?:\s+requirements?)?)\b\s*[:\-–]?\s*(.*)$/i, 'nfr'],
+  [/^(?:functional\s+(?:requirements?|specifications?|specs?)|system\s+requirements?|frs?)\b\s*[:\-–]?\s*(.*)$/i, 'func'],
+  [/^(?:business\s+)?(?:rules?|constraints?|validations?|validation rules?|requirements?)\s*[:\-–]?\s*(.*)$/i, 'rules'],
   [/^(?:post-?conditions?|outcome|expected(?: result)?|success (?:guarantee|criteria)|result)\s*[:\-–]?\s*(.*)$/i, 'post'],
   [/^(?:acceptance criteria|acceptance tests?|criteria)\s*[:\-–]?\s*(.*)$/i, 'accept'],
   [/^(?:description|summary|overview|goal|purpose)\s*[:\-–]?\s*(.*)$/i, 'description'],
 ];
+
+/** "FR1:", "NFR-2.", "REQ 3)": the number a requirement is filed under. */
+const REQ_ID = /^(?:N?FR|NFR|REQ|R|BR)[-\s]?\d+(?:\.\d+)*[a-z]?\s*[:.)\-–]\s*/i;
 
 const ITEM = /^\s*(?:(?:step\s*)?\d+[a-z]?[.):]|step\s*\d+[a-z]?\s*[-–]|\d+[a-z]?\s+[-–]|[a-z]\d+[.):]|\d+(?:\.\d+)+[.)]?|[-*•–]|[a-z][.)])\s+/i;
 
@@ -83,7 +92,7 @@ function plainLines(text: string): { line: string; heading: boolean }[] {
       }
       // A two-column "field | value" table becomes "Field: value"; its header row ("Field | Details") says nothing.
       if (/^\|/.test(l) || raw.includes('\t')) {
-        if (cells.length === 2 && /^(?:field|attribute|item|property|name|section|key)$/i.test(cells[0]) && /^(?:details?|value|description|information|content)$/i.test(cells[1])) continue;
+        if (cells.length === 2 && /^(?:field|attribute|item|property|name|section|key|flow|id|ref|#|no\.?|code|req(?:uirement)? ?id)$/i.test(cells[0]) && /^(?:details?|value|description|information|content|requirement|steps?|flow)$/i.test(cells[1])) continue;
         out.push({ line: cells.length === 2 ? `${cells[0]}: ${cells[1]}` : cells.join(' - '), heading: false });
         continue;
       }
@@ -96,7 +105,7 @@ function plainLines(text: string): { line: string; heading: boolean }[] {
 }
 
 export function parseUseCase(text: string): UseCase {
-  const uc: UseCase = { title: '', preconditions: [], mainFlow: [], alternates: [], rules: [], postconditions: [], scenarios: [] };
+  const uc: UseCase = { title: '', preconditions: [], mainFlow: [], alternates: [], rules: [], postconditions: [], requirements: [], nonFunctional: [], scenarios: [] };
   const plain = plainLines(text);
   const lines = plain.map((p) => p.line);
   const firstHeading = plain.find((p) => p.heading && !GENERIC_TITLE.test(p.line.replace(ITEM, '')) && !HEADINGS.some(([re]) => re.test(p.line.replace(ITEM, ''))))?.line;
@@ -114,6 +123,8 @@ export function parseUseCase(text: string): UseCase {
     else if (to === 'main') uc.mainFlow.push(t);
     else if (to === 'alt') uc.alternates.push(t);
     else if (to === 'rules') uc.rules.push(t);
+    else if (to === 'func') uc.requirements.push(t.replace(REQ_ID, ''));
+    else if (to === 'nfr') uc.nonFunctional.push(t.replace(REQ_ID, ''));
     else if (to === 'post') uc.postconditions.push(t);
     else if (to === 'actor' && !uc.actor) uc.actor = t;
     else loose.push(t);

@@ -2,8 +2,15 @@
 
 export interface TestCase {
   id: string;
+  /** The test case name. */
   title: string;
+  /** The scenario the case belongs to, for example "Login - Field validation: Email". */
+  scenario?: string;
   area?: string;
+  /** Which kind of requirement the case covers. */
+  category?: Category;
+  /** A check a person does by hand (uptime, browsers, account lockout): in the sheet, but not run by the tool. */
+  manual?: boolean;
   priority?: string;
   /** Positive, Negative, Boundary, Edge... */
   type?: string;
@@ -18,22 +25,28 @@ export interface TestCase {
   basis?: 'stated' | 'assumed';
 }
 
-export const FIELDS = ['id', 'title', 'area', 'priority', 'type', 'preconditions', 'steps', 'expected', 'basis'] as const;
+export type Category = 'Functional' | 'Field validation' | 'Non-functional';
+export const CATEGORIES: Category[] = ['Functional', 'Field validation', 'Non-functional'];
+
+export const FIELDS = ['id', 'scenario', 'title', 'area', 'priority', 'type', 'category', 'preconditions', 'steps', 'expected', 'manual', 'basis'] as const;
 export type Field = (typeof FIELDS)[number];
 export type Mapping = Record<Field, number>;
 
 /** The columns of the sheets this tool writes. Reading them back needs no mapping. */
-export const HEADER = ['ID', 'Title', 'Area', 'Priority', 'Type', 'Preconditions', 'Steps', 'Expected Result', 'Basis'];
-export const COLUMN_WIDTHS = [10, 36, 16, 11, 12, 34, 70, 44, 12];
+export const HEADER = ['Test Case ID', 'Scenario Name', 'Test Case Name', 'Precondition', 'Test Case Steps', 'Expected Results', 'Requirement Type', 'Test Type', 'Priority', 'Execution', 'Basis'];
+export const COLUMN_WIDTHS = [13, 34, 44, 32, 70, 46, 17, 12, 10, 11, 10];
 
 const PATTERNS: Record<Field, RegExp> = {
   id: /^(id|tc ?id|test ?case ?id|case ?id|test ?id|no\.?|#|ref(erence)?)$/i,
   title: /^(title|test ?case( name| title| description| desc| summary| scenario)?|test ?(scenario|name|title|description|objective|summary)( name| description)?|scenario( name| description)?|name|summary|case|description|objective)$/i,
+  scenario: /^(?:test\s*)?scenarios?(?:\s*(?:name|title|description))?$|^feature$|^user ?story$/i,
+  category: /^(?:requirement|req\.?)\s*(?:type|category|kind)$|^test ?category$|^requirement$/i,
+  manual: /^(?:execution(?:\s*type)?|automation(?:\s*status)?|automated\??|manual\s*\/\s*automated|automated\s*\/\s*manual|run mode|how to run)$/i,
   area: /^(area|module|feature|component|page|section|screen|functionality)$/i,
   priority: /^(priority|severity|risk|criticality)$/i,
   type: /^(type|category|kind|test ?type|case ?type)$/i,
   preconditions: /^(pre-?conditions?|prerequisites?|pre-?requisites?|setup|given|assumptions?)$/i,
-  steps: /^(steps?|test ?steps?|procedure|test procedure|actions?|how to test|execution steps?|step ?description|steps? to (reproduce|follow|execute)|test ?steps? description)$/i,
+  steps: /^(steps?|test ?steps?|test ?case ?steps?|procedure|test procedure|actions?|how to test|execution steps?|step ?description|steps? to (reproduce|follow|execute)|test ?steps? description)$/i,
   expected: /^(expected( result| outcome| behaviou?r)?s?|result|outcome|expected ?results?|acceptance|then)$/i,
   basis: /^(basis|expectation basis|basis of expectation|assumed|assumption|rationale)$/i,
 };
@@ -42,7 +55,15 @@ const PATTERNS: Record<Field, RegExp> = {
 export function detectMapping(header: string[]): Mapping {
   const mapping = Object.fromEntries(FIELDS.map((f) => [f, -1])) as Mapping;
   const taken = new Set<number>();
-  for (const field of FIELDS) {
+  // The test case's own name first: in "Scenario Name | Test Case Name" the scenario is not the title.
+  const name = header.findIndex((h) => /^(?:test ?case ?(?:name|title)|case ?name|test ?(?:name|title)|title|name)$/i.test(h.trim()));
+  if (name !== -1) {
+    mapping.title = name;
+    taken.add(name);
+  }
+  // Title before scenario: a lone "Test Scenario" column is the name of each case.
+  for (const field of [...FIELDS.filter((f) => f !== 'scenario'), 'scenario' as const]) {
+    if (field === 'title' && name !== -1) continue;
     const i = header.findIndex((h, idx) => !taken.has(idx) && PATTERNS[field].test(h.trim()));
     if (i !== -1) {
       mapping[field] = i;
@@ -102,7 +123,9 @@ export function rowsToCases(rows: string[][], mapping: Mapping, skipHeader: bool
     }
     used.add(finalId.toLowerCase());
     current = {
-      id: finalId, title: title || finalId, area: get(r, 'area') || undefined, priority: get(r, 'priority') || undefined, type: get(r, 'type') || undefined,
+      id: finalId, title: title || finalId, scenario: get(r, 'scenario') || undefined, area: get(r, 'area') || undefined,
+      category: CATEGORIES.find((c) => c.toLowerCase() === get(r, 'category').toLowerCase().replace(/^nfr$|^non ?functional$/, 'non-functional').replace(/^validation$/, 'field validation')),
+      manual: /^(?:manual|no|by hand|not automated)$/i.test(get(r, 'manual')) || undefined, priority: get(r, 'priority') || undefined, type: get(r, 'type') || undefined,
       preconditions: get(r, 'preconditions') || undefined, steps, expected, basis: /assum/i.test(get(r, 'basis')) ? 'assumed' : /stated|given|spec/i.test(get(r, 'basis')) ? 'stated' : undefined,
     };
     cases.push(current);
@@ -116,8 +139,8 @@ export function casesToRows(cases: TestCase[]): string[][] {
   return [
     HEADER,
     ...cases.map((c) => [
-      c.id, c.title, c.area ?? '', c.priority ?? '', c.type ?? '', c.preconditions ?? '',
-      c.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'), c.expected, c.basis === 'assumed' ? 'Assumed' : c.basis === 'stated' ? 'Stated' : '',
+      c.id, c.scenario ?? c.area ?? '', c.title, c.preconditions ?? '', c.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'), c.expected,
+      c.category ?? '', c.type ?? '', c.priority ?? '', c.manual ? 'Manual' : 'Automated', c.basis === 'assumed' ? 'Assumed' : c.basis === 'stated' ? 'Stated' : '',
     ]),
   ];
 }

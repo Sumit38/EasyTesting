@@ -86,10 +86,10 @@ describe('the guided path: use case to cases to run to report', () => {
     const x = await api(`/api/suites/${suiteId}/download?format=xlsx`);
     assert.match(x.res.headers.get('content-disposition') ?? '', /\.xlsx"/);
     const rows = readXlsx(new Uint8Array(x.body as Buffer));
-    assert.deepEqual(rows[0].slice(0, 2), ['ID', 'Title']);
+    assert.deepEqual(rows[0].slice(0, 6), ['Test Case ID', 'Scenario Name', 'Test Case Name', 'Precondition', 'Test Case Steps', 'Expected Results']);
     assert.ok(rows.length > 8);
     const c = await api(`/api/suites/${suiteId}/download?format=csv`);
-    assert.match((c.body as Buffer).toString('utf8'), /^﻿ID,Title,Area/);
+    assert.match((c.body as Buffer).toString('utf8'), /^﻿Test Case ID,Scenario Name,Test Case Name,Precondition,Test Case Steps,Expected Results,Requirement Type/);
   });
 
   it('reads an uploaded sheet, asks for the column mapping, and builds the same cases', async () => {

@@ -263,6 +263,13 @@ export async function runCases(opts: RunOptions): Promise<{ results: CaseResult[
         live[k] = results[results.length - 1];
         continue;
       }
+      if (c.manual) {
+        // A check a person does by hand (uptime, browsers, lockout): listed, not run.
+        results.push({ ...live[k], status: 'skipped', steps: live[k].steps.map((st) => ({ ...st, status: 'skipped' as const })), advice: 'A manual check: a person does it by hand, following the steps in the sheet.' });
+        live[k] = results[results.length - 1];
+        log(`\n▷ ${c.id} ${c.title} (manual check, not run)`);
+        continue;
+      }
       const started = Date.now();
       if (c.steps.length) live[k].status = 'running';
       const label = `${c.id} ${c.title}`;
@@ -596,6 +603,92 @@ const FLAGGED_JS = `(() => {
   return out;
 })()`;
 
+/**
+ * Finds the close control of the pop-up on top of the page: a ✕ or × with no name (as on Flipkart), a button
+ * labelled "Close" or "No thanks", or anything whose label, class or id says close. Only controls inside something
+ * floating over the page (a dialog, a fixed layer, a "modal" or "popup") count, so a × that clears a search box is
+ * left alone. The one picked is marked with data-et-close so it can be clicked; null when there is no pop-up.
+ */
+const CLOSE_JS = String.raw`(() => {
+  const SYM = /^[✕✖×✗✘⨯╳\u{1F5D9}xX]$/u;
+  const SAYS_CLOSE = /(?:^|[^a-z])(?:close|dismiss)(?:[^a-z]|$)|^cancel$/i;
+  const CLOSE_TEXT = /^(?:close|dismiss)$/i;
+  const LATER_TEXT = /^(?:no,? thanks?|not now|maybe later|later|skip|i'?ll do it later|remind me later|continue without .{0,20})$/i;
+  const LOOKS_CLOSE = /close|dismiss/i;
+  const LAYER = /modal|popup|pop-up|dialog|overlay|lightbox|interstitial|drawer|consent|cookie/i;
+  const W = innerWidth, H = innerHeight;
+  const shown = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4 || r.bottom <= 0 || r.right <= 0 || r.top >= H || r.left >= W) return false;
+    const s = getComputedStyle(el);
+    return s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.05;
+  };
+  // The floating layer an element sits in, and how sure we are that it is a pop-up.
+  const layerOf = (el) => {
+    let best = null;
+    for (let a = el.parentElement; a && a !== document.body && a !== document.documentElement; a = a.parentElement) {
+      const role = a.getAttribute('role');
+      if (role === 'dialog' || role === 'alertdialog' || a.getAttribute('aria-modal') === 'true' || a.tagName === 'DIALOG') return { el: a, weight: 3 };
+      const s = getComputedStyle(a);
+      if (!best && LAYER.test(String(a.className && a.className.baseVal !== undefined ? a.className.baseVal : a.className) + ' ' + a.id)) best = { el: a, weight: 2.5 };
+      if (!best && s.position === 'fixed') best = { el: a, weight: 2 };
+    }
+    return best;
+  };
+  // A layer holding the middle of the screen is a pop-up in the way; a fixed header is not.
+  const mid = document.elementFromPoint(W / 2, H / 2);
+  const cands = [];
+  for (const el of document.querySelectorAll('button, a, [role=button], span, div, i, svg, img, [onclick], [aria-label], [title]')) {
+    const text = (el.innerText || el.textContent || '').trim();
+    if (text.length > 40) continue;
+    const label = [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('alt')].filter(Boolean).join(' ');
+    const cls = String(el.className && el.className.baseVal !== undefined ? el.className.baseVal : el.className || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('data-testid') || '');
+    let says = 0;
+    if (SYM.test(text)) says = 3;
+    else if (SAYS_CLOSE.test(label)) says = 3;
+    else if (CLOSE_TEXT.test(text)) says = 2.8;
+    else if (LOOKS_CLOSE.test(cls) && text.length <= 2) says = 2;
+    else if (LATER_TEXT.test(text)) says = 1.5;
+    if (!says || !shown(el)) continue;
+    const layer = layerOf(el);
+    if (!layer) continue;
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const top = document.elementFromPoint(Math.min(Math.max(cx, 0), W - 1), Math.min(Math.max(cy, 0), H - 1));
+    const onTop = !!top && (top === el || el.contains(top) || top.contains(el));
+    const st = getComputedStyle(el);
+    const clickable = /^(BUTTON|A)$/.test(el.tagName) || el.getAttribute('role') === 'button' || el.hasAttribute('onclick') || st.cursor === 'pointer';
+    let score = says + layer.weight + (onTop ? 2 : -3) + (clickable ? 1 : 0) + (r.width <= 80 && r.height <= 80 ? 0.5 : 0);
+    if (mid && (layer.el.contains(mid) || mid === layer.el)) score += 1.5;
+    cands.push({ el, score, area: r.width * r.height, text, label });
+  }
+  if (!cands.length) return null;
+  cands.sort((a, b) => b.score - a.score || a.area - b.area);
+  const best = cands[0];
+  if (best.score < 6) return null;
+  document.querySelectorAll('[data-et-close]').forEach((e) => e.removeAttribute('data-et-close'));
+  const token = String(Date.now()) + Math.random().toString(36).slice(2, 6);
+  best.el.setAttribute('data-et-close', token);
+  const tag = best.el.tagName.toLowerCase();
+  const what = best.label ? '"' + best.label.slice(0, 40) + '"' : best.text ? '"' + best.text.slice(0, 40) + '"' : 'close icon';
+  return { token, what: what + ' (' + tag + ') on the pop-up' };
+})()`;
+
+/**
+ * Closes the pop-up on top of the page, waiting up to `waitMs` for one to show. Returns what was clicked, or
+ * undefined when no pop-up showed up.
+ */
+async function closePopup(page: Page, timeout: number, waitMs: number): Promise<string | undefined> {
+  const found = await poll(waitMs, async () => (await page.evaluate(CLOSE_JS)) as { token: string; what: string } | null);
+  if (!found) return undefined;
+  const el = page.locator(`[data-et-close="${found.token}"]`).first();
+  await el.click({ timeout: Math.min(timeout, 5000), noWaitAfter: true }).catch(() => el.click({ force: true, timeout: 3000, noWaitAfter: true }));
+  // Most pop-ups go at once; some fade out. If it stays, Escape is the other way pop-ups close.
+  const gone = await poll(3000, async () => !(await el.isVisible().catch(() => false)));
+  if (!gone) await page.keyboard.press('Escape').catch(() => undefined);
+  return found.what;
+}
+
 const KINDS: Record<string, RegExp> = {
   error: /error|invalid|required|incorrect|wrong|fail|not valid|denied|must|cannot|can't|unable|too (short|long)|alert|danger/i,
   validation: /error|invalid|required|incorrect|wrong|must|not valid/i,
@@ -656,6 +749,30 @@ async function doStep(page: Page, p: ParsedStep, ctx: Ctx): Promise<void> {
     }
   }
 
+  if (p.action === 'click' && p.hint === 'close') {
+    // Pop-ups often come a moment after the page, so wait a little for one; but they do not come every time.
+    const closed = await closePopup(page, t, Math.min(t, 8000));
+    if (closed) {
+      r.matchedAs = closed;
+      r.via = 'name';
+      await settle();
+      return;
+    }
+    // No pop-up: maybe the step meant a plain "Close" button on the page.
+    const snap = await snapshot(page);
+    const m = rank(snap.nodes, 'Close', 'button', 'act');
+    if (m.best && m.best.score >= 0.85) {
+      const sel = (await stableSelector(page, playwrightProbe(page, 300), m.best.node)) ?? m.best.node.cssPath;
+      await andFollow(page, () => page.locator(sel).first().click({ timeout: t, noWaitAfter: true }), ctx.pageTimeout);
+      await settle();
+      r.matchedAs = describeNode(m.best.node);
+      r.via = 'name';
+      return;
+    }
+    r.notes.push('No pop-up showed up this time, so there was nothing to close. The case carried on.');
+    return;
+  }
+
   if (NEEDS_ELEMENT.includes(p.action)) {
     const { selector } = await locate(page, p, ctx, 'act');
     const el = page.locator(selector).first();
@@ -663,7 +780,18 @@ async function doStep(page: Page, p: ParsedStep, ctx: Ctx): Promise<void> {
     await remember(page, ctx, ctx.healedSelector ?? r.selector!);
     try {
       if (p.action === 'click') {
-        await andFollow(page, () => el.click({ timeout: t, noWaitAfter: true }), ctx.pageTimeout);
+        // A pop-up the test case did not mention (a login prompt, an offer) may be covering the element: close it first.
+        const covered = (e: Error) => /intercepts pointer events/i.test(e.message);
+        const clearWay = async () => {
+          const closed = await closePopup(page, t, 1500);
+          if (closed) r.notes.push(`A pop-up was covering "${p.target}", so it was closed first (${closed}).`);
+          return closed;
+        };
+        if (await el.click({ trial: true, timeout: Math.min(t, 2500) }).then(() => false, covered)) await clearWay();
+        await andFollow(page, () => el.click({ timeout: t, noWaitAfter: true }), ctx.pageTimeout).catch(async (e: Error) => {
+          if (!covered(e) || !(await clearWay())) throw e;
+          await andFollow(page, () => el.click({ timeout: t, noWaitAfter: true }), ctx.pageTimeout);
+        });
         await settle();
       } else if (p.action === 'hover') await el.hover({ timeout: t });
       else if (p.action === 'type') {
@@ -719,6 +847,11 @@ async function verify(page: Page, p: ParsedStep, ctx: Ctx): Promise<void> {
       return;
     }
     case 'url': {
+      // An app running on this computer (localhost) never has HTTPS; the check means something only on a real address.
+      if (want.toLowerCase() === 'https://' && /^http:\/\/(?:localhost|127\.\d+\.\d+\.\d+|\[::1\])(?::\d+)?\//i.test(page.url())) {
+        ctx.r.notes.push('This is a local address (on this computer), where HTTPS is not expected. Run against the real site to check it.');
+        return;
+      }
       const ok = await poll(t, async () => (p.exact ? page.url() === want : page.url().toLowerCase().includes(want.toLowerCase())));
       if (!ok) throw fail(`The address is ${page.url()}, not ${p.exact ? '' : 'containing '}${want}.`);
       return;
@@ -769,6 +902,38 @@ async function verify(page: Page, p: ParsedStep, ctx: Ctx): Promise<void> {
     }
   }
 
+  if (p.check === 'loadtime') {
+    const limit = Number(want) || 3000;
+    // The browser's own record of how long the page that is open took to load (navigation start to the load event).
+    const took = await poll(Math.max(t, limit + 2000), async () => {
+      const ms = (await page.evaluate(`(() => { const n = performance.getEntriesByType('navigation')[0]; return n && n.loadEventEnd > 0 ? n.loadEventEnd - n.startTime : 0; })()`)) as number;
+      return ms > 0 ? ms : undefined;
+    });
+    if (took === undefined) throw fail(`The page had not finished loading after ${Math.round(Math.max(t, limit + 2000) / 1000)} seconds; the limit is ${limit / 1000} seconds.`);
+    ctx.r.matchedAs = `loaded in ${(took / 1000).toFixed(2)} s`;
+    if (took > limit) throw fail(`The page took ${(took / 1000).toFixed(2)} seconds to load; the limit is ${limit / 1000} seconds.`);
+    return;
+  }
+  if (p.check === 'labels') {
+    const bare = (await page.evaluate(`(() => {
+      const out = [];
+      for (const e of document.querySelectorAll('input, select, textarea')) {
+        const type = (e.getAttribute('type') || 'text').toLowerCase();
+        if (['hidden', 'submit', 'button', 'reset', 'image'].includes(type)) continue;
+        const r = e.getBoundingClientRect(), st = getComputedStyle(e);
+        if (r.width === 0 || r.height === 0 || st.visibility === 'hidden' || st.display === 'none') continue;
+        const by = (e.getAttribute('aria-labelledby') || '').split(/\\s+/).map((id) => document.getElementById(id)).filter(Boolean).map((x) => x.textContent).join(' ');
+        const label = [...(e.labels || [])].map((l) => l.textContent).join(' ') + ' ' + (e.getAttribute('aria-label') || '') + ' ' + by + ' ' + (e.getAttribute('title') || '');
+        if (!label.trim()) out.push({ name: e.getAttribute('placeholder') || e.getAttribute('name') || e.id || e.tagName.toLowerCase(), placeholder: !!e.getAttribute('placeholder') });
+      }
+      return out;
+    })()`)) as { name: string; placeholder: boolean }[];
+    const none = bare.filter((b) => !b.placeholder);
+    if (none.length) throw fail(`${none.length} field${none.length === 1 ? ' has' : 's have'} no label at all: ${none.slice(0, 6).map((b) => JSON.stringify(b.name)).join(', ')}.`);
+    if (bare.length) ctx.r.notes.push(`${bare.length} field${bare.length === 1 ? ' is' : 's are'} named only by the hint text inside (${bare.slice(0, 4).map((b) => JSON.stringify(b.name)).join(', ')}), which disappears when typing starts. A visible label is better for accessibility.`);
+    return;
+  }
+
   // Checks about one element.
   if (p.check === 'hidden') {
     const gone = await poll(t, async () => {
@@ -795,6 +960,7 @@ async function verify(page: Page, p: ParsedStep, ctx: Ctx): Promise<void> {
       case 'unchecked': return !(await el.isChecked());
       case 'editable': return await el.isEditable();
       case 'readonly': return !(await el.isEditable());
+      case 'masked': return (await el.getAttribute('type'))?.toLowerCase() === 'password' || !['', 'none'].includes(String(await el.evaluate((e: unknown) => (globalThis as unknown as { getComputedStyle(x: unknown): { getPropertyValue(p: string): string } }).getComputedStyle(e).getPropertyValue('-webkit-text-security')).catch(() => '')).trim());
       case 'value': {
         const v = await el.inputValue();
         return v === want || norm(v).includes(norm(want));

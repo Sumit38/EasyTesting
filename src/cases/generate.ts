@@ -1,5 +1,5 @@
-import type { TestCase } from './model.js';
-import { parseStep } from './steps.js';
+import type { Category, TestCase } from './model.js';
+import { closesPopup, parseStep } from './steps.js';
 import { parseUseCase, type UseCase } from './usecase.js';
 
 export interface GenerateOptions {
@@ -38,9 +38,15 @@ export interface Analysis {
   advice: string[];
 }
 
+/** " (3 functional, 8 field validation, 4 non-functional)" when the cases say which kind of requirement they cover. */
+function byKind(cases: TestCase[]): string {
+  const parts = (['Functional', 'Field validation', 'Non-functional'] as const).map((k) => [k, cases.filter((c) => c.category === k).length] as const).filter(([, n]) => n);
+  return parts.length ? ` (${parts.map(([k, n]) => `${n} ${k.toLowerCase()}`).join(', ')})` : '';
+}
+
 /** Grades what the generator made of a use case, and says what would make it better. */
 export function analyse(uc: UseCase, cases: TestCase[], notes: string[]): Analysis {
-  const all = cases.flatMap((c) => c.steps).map((s) => parseStep(s).confidence);
+  const all = cases.filter((c) => !c.manual).flatMap((c) => c.steps).map((s) => parseStep(s).confidence);
   const understood = all.length ? Math.round((all.reduce((a, b) => a + b, 0) / all.length) * 100) : 0;
   const needYou = all.filter((c) => c < 0.6).length;
   const leftOut = notes.filter((n) => /left out|not a step here|outside the website/.test(n)).length;
@@ -54,7 +60,7 @@ export function analyse(uc: UseCase, cases: TestCase[], notes: string[]): Analys
   if (needYou) advice.push(`${needYou} step${needYou === 1 ? ' needs' : 's need'} a name or a value the use case does not give. Fill them in with "Fix the gaps" on the next screen.`);
   if (!found.alternates && !found.scenarios && cases.length) advice.push('There is no "Alternate Flows" section, so only the main flow and field checks were written. Add the error cases you care about to get tests for them.');
   const summary = !cases.length ? 'No test cases could be written from this text.'
-    : `Found ${found.flowSteps || found.scenarios} ${found.flowSteps ? 'flow steps' : 'scenarios'}${found.alternates ? `, ${found.alternates} alternate flow${found.alternates === 1 ? '' : 's'}` : ''}${found.rules ? `, ${found.rules} rule${found.rules === 1 ? '' : 's'}` : ''}; wrote ${cases.length} test case${cases.length === 1 ? '' : 's'} and understood ${understood}% of their steps.`;
+    : `Found ${found.flowSteps || found.scenarios} ${found.flowSteps ? 'flow steps' : 'scenarios'}${found.alternates ? `, ${found.alternates} alternate flow${found.alternates === 1 ? '' : 's'}` : ''}${found.rules ? `, ${found.rules} rule${found.rules === 1 ? '' : 's'}` : ''}; wrote ${cases.length} test case${cases.length === 1 ? '' : 's'}${byKind(cases)} and understood ${understood}% of their steps.`;
   return { title: uc.title, actor: uc.actor, found, mainSteps, understood, needYou, leftOut, quality, summary, advice };
 }
 
@@ -73,6 +79,8 @@ const BAD: Partial<Record<Kind, [string, string]>> = {
 };
 
 const title = (s: string) => s.replace(/\s+/g, ' ').trim().replace(/^./, (c) => c.toUpperCase());
+/** A requirement shortened for a test case name, cut at a word. */
+const clip = (s: string, max = 80) => (s.length <= max ? s : s.slice(0, max).replace(/\s+\S*$/, '') + '…');
 const stripArticle = (s: string) => s.replace(/^(?:the|a|an|his|her|their|its|valid|correct|his or her)\s+/i, '').trim();
 const fieldLabel = (s: string) => title(stripArticle(stripArticle(s)).replace(/\s+(?:field|box|input)$/i, ''));
 
@@ -85,7 +93,7 @@ interface Planned {
 }
 
 /** Verbs in the third person, as use cases write them: "The customer adds", "The system displays". */
-const VERB = '(?:enters?|types?|inputs?|provides?|fills?|clicks?|presses?|taps?|selects?|chooses?|picks?|opens?|navigates?|goes|visits?|checks?|ticks?|submits?|views?|sees?|shows?|displays?|presents?|renders?|redirects?|logs?|signs?|uploads?|searches?|rejects?|prevents?|blocks?|denies?|sends?|confirms?|notifies?|validates?|keeps?|stays?|remains?|accepts?|agrees?|launch(?:es)?|access(?:es)?|takes?|adds?|removes?|proceeds?|makes?|pays?|places?|packs?|ships?|delivers?|receives?|updates?|cancels?|registers?|creates?|saves?|deletes?|edits?|processes?|records?|stores?|generates?|calculates?|charges?|reserves?|deducts?|assigns?|is|are)';
+const VERB = '(?:enters?|types?|inputs?|provides?|fills?|clicks?|presses?|taps?|selects?|chooses?|picks?|opens?|navigates?|goes|visits?|checks?|ticks?|submits?|views?|sees?|shows?|displays?|presents?|renders?|redirects?|logs?|signs?|uploads?|searches?|rejects?|prevents?|blocks?|denies?|sends?|confirms?|notifies?|validates?|keeps?|stays?|remains?|accepts?|agrees?|launch(?:es)?|access(?:es)?|takes?|adds?|removes?|proceeds?|makes?|pays?|places?|packs?|ships?|delivers?|receives?|updates?|cancels?|registers?|creates?|saves?|deletes?|edits?|processes?|records?|stores?|generates?|calculates?|charges?|reserves?|deducts?|assigns?|closes?|dismiss(?:es)?|skips?|is|are)';
 
 /** "The customer selects a product and adds it to the cart" is two steps; the second keeps the subject of the first. */
 export function splitCompound(sentence: string): string[] {
@@ -113,7 +121,7 @@ function plan(sentence: string, opts: GenerateOptions, first: boolean, notes: st
     }
     s = s.slice(subject[0].length);
   }
-  const verbFix: Record<string, string> = { enters: 'enter', types: 'type', inputs: 'input', provides: 'provide', clicks: 'click', presses: 'press', taps: 'tap', selects: 'select', chooses: 'choose', picks: 'pick', opens: 'open', navigates: 'navigate', goes: 'go', visits: 'visit', checks: 'check', ticks: 'tick', submits: 'submit', fills: 'fill', views: 'view', sees: 'see', shows: 'show', displays: 'display', redirects: 'redirect', logs: 'log', signs: 'sign', uploads: 'upload', searches: 'search', adds: 'add', removes: 'remove', proceeds: 'proceed', makes: 'make', pays: 'pay', places: 'place', receives: 'receive', confirms: 'confirm', sends: 'send', updates: 'update', cancels: 'cancel', registers: 'register', creates: 'create', saves: 'save', deletes: 'delete', edits: 'edit' };
+  const verbFix: Record<string, string> = { enters: 'enter', types: 'type', inputs: 'input', provides: 'provide', clicks: 'click', presses: 'press', taps: 'tap', selects: 'select', chooses: 'choose', picks: 'pick', opens: 'open', navigates: 'navigate', goes: 'go', visits: 'visit', checks: 'check', ticks: 'tick', submits: 'submit', fills: 'fill', views: 'view', sees: 'see', shows: 'show', displays: 'display', redirects: 'redirect', logs: 'log', signs: 'sign', uploads: 'upload', searches: 'search', adds: 'add', removes: 'remove', proceeds: 'proceed', makes: 'make', pays: 'pay', places: 'place', receives: 'receive', confirms: 'confirm', sends: 'send', updates: 'update', cancels: 'cancel', registers: 'register', creates: 'create', saves: 'save', deletes: 'delete', edits: 'edit', closes: 'close', dismisses: 'dismiss', skips: 'skip' };
   s = s.replace(/^(\w+)/, (w) => verbFix[w.toLowerCase()] ?? w);
   let m: RegExpMatchArray | null;
 
@@ -150,6 +158,7 @@ function plan(sentence: string, opts: GenerateOptions, first: boolean, notes: st
   if ((m = s.match(/^(?:log|sign)\s?in(?:\s+to\s+(?:the|his|her|their)?\s*(?:account|application|app|site|website|system))?\s+(?:with|using)\s+(?:his|her|their|the|a|valid|registered|correct)?\s*(.+)$/i))) {
     return [...plan(`enter ${m[1].replace(/\bcredentials?\b/i, 'email and password')}`, opts, false, notes), { text: 'Click the "Log in" button', role: 'submit' }];
   }
+  if (closesPopup(s)) return [{ text: 'Close the pop-up', role: 'other' }];
   if (/^(?:log|sign)\s?(?:out|off)\b/i.test(s)) return [{ text: 'Click "Log out"', role: 'other' }];
   if ((m = s.match(/^search(?:es)?\s+(?:for\s+)?(.+)$/i))) {
     const quoted = m[1].match(/["“']([^"”']+)["”']/);
@@ -225,7 +234,10 @@ export function generateCases(text: string, opts: GenerateOptions = {}): Generat
   const cases: TestCase[] = [];
   let n = opts.firstNumber ?? 1;
   const source = `Use case: ${uc.title}`;
-  const add = (c: Omit<TestCase, 'id' | 'source'>) => cases.push({ basis: 'stated', ...c, id: `TC-${String(n++).padStart(3, '0')}`, source });
+  // Every case belongs to a scenario and covers one kind of requirement; `group` says which, for the cases added next.
+  let group: Pick<TestCase, 'scenario' | 'category'> = {};
+  const scenario = (part: string, category: Category) => { group = { scenario: `${uc.title} - ${part}`, category }; };
+  const add = (c: Omit<TestCase, 'id' | 'source'>) => cases.push({ basis: 'stated', ...group, ...c, id: `TC-${String(n++).padStart(3, '0')}`, source });
   // Does the use case itself say something about this field? Used to tell stated expectations from guesses.
   const said = (field: string, re: RegExp) => [...uc.rules, ...uc.alternates, ...uc.preconditions].some((t) => re.test(t) && t.toLowerCase().includes(field.toLowerCase().split(' ')[0]));
   const REQUIRED = /\b(required|mandatory|must (?:not )?be (?:empty|blank|provided|entered)|cannot be (?:empty|blank)|can't be (?:empty|blank)|is needed|blank|empty|missing)\b/i;
@@ -242,6 +254,7 @@ export function generateCases(text: string, opts: GenerateOptions = {}): Generat
   if (!planned.length) notes.push('No steps were found in the main flow. Add a "Main flow:" section with numbered steps.');
 
   // 1. The happy path.
+  scenario('Main flow', 'Functional');
   if (planned.length) add({ title: `${uc.title}: main flow succeeds`, type: 'Positive', priority: 'High', basis: 'stated', preconditions, steps: stepsOf(planned), expected: expectedText });
 
   // Replace the value typed into one field and cut the outcome checks off, ending in an error check.
@@ -260,6 +273,7 @@ export function generateCases(text: string, opts: GenerateOptions = {}): Generat
     const name = f.field!.name;
     if (seen.has(name.toLowerCase())) continue;
     seen.add(name.toLowerCase());
+    scenario(`Field validation: ${name}`, 'Field validation');
     const kind = f.field!.kind;
     add({ title: `${uc.title}: ${name} left empty`, type: 'Negative', priority: said(name, REQUIRED) ? 'High' : 'Low', basis: said(name, REQUIRED) ? 'stated' : 'assumed', preconditions, steps: stepsOf(withValue(name, null, 'empty')), expected: errorExpected });
     const bad = BAD[kind];
@@ -274,11 +288,15 @@ export function generateCases(text: string, opts: GenerateOptions = {}): Generat
 
   // 3. Business rules with numbers become boundary cases.
   const textFields = fields.map((f) => f.field!);
-  for (const rule of uc.rules) {
+  // Functional requirements with limits ("The password must be at least 8 characters") are field rules too.
+  const limited = new Set<string>();
+  for (const rule of [...uc.rules, ...uc.requirements]) {
     const target = textFields.find((f) => new RegExp(f.name.split(' ')[0], 'i').test(rule)) ?? (textFields.length === 1 ? textFields[0] : undefined);
-    const min = rule.match(/(?:at least|minimum(?: of)?|min\.?|no (?:fewer|less) than)\s+(\d+)\s+(?:characters?|chars?|letters?|digits?)/i);
+    if (target) scenario(`Field validation: ${target.name}`, 'Field validation');
+    const min =rule.match(/(?:at least|minimum(?: of)?|min\.?|no (?:fewer|less) than)\s+(\d+)\s+(?:characters?|chars?|letters?|digits?)/i);
     const max = rule.match(/(?:at most|maximum(?: of)?|max\.?|no more than|up to|not exceed|must not exceed)\s+(\d+)\s+(?:characters?|chars?)/i);
     const range = rule.match(/between\s+(\d+)\s+and\s+(\d+)/i);
+    if (target && (min || max || range)) limited.add(rule);
     const fill = (len: number, kind: Kind) => (kind === 'password' ? ('Aa1!' + 'a'.repeat(Math.max(0, len))).slice(0, Math.max(len, 0)) : 'a'.repeat(Math.max(len, 0)));
     if (target && min) {
       const k = Number(min[1]);
@@ -300,16 +318,19 @@ export function generateCases(text: string, opts: GenerateOptions = {}): Generat
       }
     } else {
       // "must be a valid email" and the like are already covered by the invalid-format case of each field.
-      if (!/\b(valid|format|well-formed|correct)\b/i.test(rule)) notes.push(`Rule not turned into a test: "${rule}". Add a case for it by hand, or use the AI option.`);
+      if (!uc.requirements.includes(rule) && !/\b(valid|format|well-formed|correct)\b/i.test(rule)) notes.push(`Rule not turned into a test: "${rule}". Add a case for it by hand, or use the AI option.`);
     }
   }
 
   // 4. Alternate flows.
+  scenario('Alternate flows', 'Functional');
   for (const alt of uc.alternates) {
     const label = alt.replace(/^[A-Za-z]?\d+[a-z]?[.):]\s*/, '');
     const name = label.split(/[:.-]\s+/)[0].trim();
     const quoted = label.match(/["“']([^"”']{3,})["”']/);
-    const field = textFields.find((f) => new RegExp(f.name.split(' ')[0], 'i').test(label));
+    // The field the flow is about: named in its title first ("Wrong password"), then anywhere outside the quoted message.
+    const names = (s: string) => textFields.find((f) => new RegExp(`\\b${f.name.split(' ')[0]}`, 'i').test(s));
+    const field = names(name) ?? names(label.replace(/["“'][^"”']*["”']/g, ''));
     const expected = quoted ? `The message "${quoted[1]}" is shown` : errorExpected;
     const finish: Planned[] = [quoted ? { text: `Verify "${quoted[1]}" is displayed`, role: 'verify' } : { text: 'Verify an error message is displayed', role: 'verify' }];
     if (field && /\b(?:empty|blank|missing|required|not provided|omit|without)\b/i.test(label)) {
@@ -326,6 +347,7 @@ export function generateCases(text: string, opts: GenerateOptions = {}): Generat
   }
 
   // 5. Given / When / Then scenarios.
+  scenario('Acceptance criteria', 'Functional');
   for (const sc of uc.scenarios) {
     const steps: string[] = [];
     let first = true;
@@ -337,6 +359,95 @@ export function generateCases(text: string, opts: GenerateOptions = {}): Generat
     for (const t of sc.then) steps.push(...plan(`system shows ${t.replace(/^(?:the\s+)?system\s+(?:shows|displays)\s+/i, '')}`, opts, false, notes).map((p) => p.text));
     add({ title: `${uc.title}: ${sc.name}`, type: 'Acceptance', priority: 'High', preconditions: sc.given.join('; ') || preconditions, steps, expected: sc.then.join('; ') });
   }
+
+  // 6. Functional requirements: every one is traced to a case. What a browser can show is checked; the rest is a manual check.
+  scenario('Functional requirements', 'Functional');
+  const upToOutcome = stepsOf(planned.slice(0, outcomeStart));
+  uc.requirements.forEach((fr, i) => {
+    if (limited.has(fr)) return;
+    const said = fr.replace(/[.;]+$/, '');
+    const name = `FR${i + 1}: ${clip(said)}`;
+    const core = said
+      .replace(/\s+(?:after|when|once|if|upon|on|whenever|before|while|during|for)\s+.*$/i, '')
+      .replace(/\b(?:shall|should|must|will|can)\s+be\s+able\s+to\s+/i, '')
+      .replace(/\bshall\b/i, 'will');
+    const made = splitCompound(core).flatMap((x) => plan(x, opts, false, [], uc.actor));
+    const checks = made.filter((p) => p.role === 'verify');
+    const acts = made.filter((p) => p.role !== 'verify' && p.role !== 'open');
+    if (planned.length && checks.length) add({ title: name, type: 'Positive', priority: 'High', preconditions, steps: stepsOf([...planned.slice(0, outcomeStart), ...checks]), expected: said });
+    else if (planned.length && acts.length) add({ title: name, type: 'Positive', priority: 'High', preconditions, steps: [...stepsOf(planned), ...stepsOf(acts)], expected: said });
+    else add({ title: name, type: 'Positive', priority: 'Medium', preconditions, manual: true, steps: [...(upToOutcome.length ? upToOutcome : ['Open the application']), `Check that: ${said}`], expected: said });
+  });
+
+  // 7. Non-functional requirements: speed, security, accessibility, compatibility, reliability, usability.
+  const openSteps = planned.length ? stepsOf(planned.slice(0, Math.max(1, planned.findIndex((p) => p.role !== 'open')))) : ['Open the application'];
+  const pw = fields.find((f) => f.field!.kind === 'password');
+  const untilPassword = pw ? stepsOf(planned.slice(0, planned.indexOf(pw) + 1)) : openSteps;
+  const pwName = pw?.field!.name ?? 'Password';
+  const covered = new Set<string>();
+  const nfr = (text: string): { area: string; steps: string[]; manual?: boolean; kind?: string } => {
+    const t = text.toLowerCase();
+    const secs = text.match(/(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|milliseconds?|ms)\b/i);
+    if (/\b(?:concurrent|simultaneous|\d[\d,]*\s+(?:users|requests)|per second|throughput|peak load|load test|stress)\b/i.test(text)) {
+      return { area: 'Performance', manual: true, kind: 'load', steps: ['Set up a load test with the tool your team uses (for example JMeter or k6)', `Drive the main flow with the load described: ${text}`, 'Record response times and errors', 'Compare them with the requirement'] };
+    }
+    if (secs && /\b(?:load|respon|display|open|render|fast|quick|within|under|less than|time)/i.test(text)) {
+      const ms = /^m/i.test(secs[2]) ? Number(secs[1]) : Number(secs[1]) * 1000;
+      const after = /\b(?:respon|after|submit|result|search|log ?in|sign ?in|save)/i.test(text) && !/\bpage\s+(?:must|should|shall|will)?\s*loads?\b/i.test(text);
+      covered.add('speed');
+      return { area: 'Performance', kind: 'speed', steps: [...(after && upToOutcome.length ? upToOutcome : openSteps), `Verify the page loads within ${ms >= 1000 ? `${ms / 1000} seconds` : `${ms} ms`}`] };
+    }
+    if (/\bmask|asterisk|\bdots\b|hidden while typing|plain ?text|not (?:be )?(?:shown|displayed|visible)\b/i.test(text) && /pass(?:word|code)|\bpin\b/i.test(text)) {
+      covered.add('masked');
+      return { area: 'Security', kind: 'masked', steps: [...untilPassword, `Verify the ${pwName} field is masked`] };
+    }
+    if (/\bhttps\b|\bssl\b|\btls\b|secure connection|encrypted (?:connection|transmission|in transit)/i.test(text)) {
+      covered.add('https');
+      return { area: 'Security', kind: 'https', steps: [...openSteps, 'Verify the URL contains "https://"'] };
+    }
+    const lock = text.match(/(\d+)\s+(?:consecutive\s+)?(?:failed|unsuccessful|wrong|invalid|incorrect)/i);
+    if (/\block(?:ed|out)?\b/i.test(text) && lock) {
+      return { area: 'Security', manual: true, steps: ['Open the application', `Try to log in with a wrong password ${lock[1]} times in a row`, 'Try to log in with the correct password', 'Confirm the account is locked and a message says so'] };
+    }
+    if (/\b(?:session|time ?out|idle|inactiv)/i.test(text)) {
+      return { area: 'Security', manual: true, steps: ['Log in', `Leave the application idle for the time stated: ${text}`, 'Try to use the application again', 'Confirm you are asked to log in again'] };
+    }
+    if (/\b(?:label|screen reader|accessib|wcag|aria|a11y)/i.test(text)) {
+      covered.add('labels');
+      return { area: 'Accessibility', kind: 'labels', steps: [...openSteps, 'Verify all fields have labels'] };
+    }
+    if (/\b(?:keyboard|contrast|colou?r blind|font size|zoom)/i.test(text)) return { area: 'Accessibility', manual: true, steps: ['Open the application', 'Carry out the main flow', `Confirm: ${text}`] };
+    if (/\b(?:browser|chrome|firefox|safari|edge|mobile|tablet|device|responsive|resolution|screen size)/i.test(text)) {
+      return { area: 'Compatibility', manual: true, steps: ['Open the application in each browser or device the requirement names', 'Carry out the main flow on each', 'Confirm every page looks right and every step works'] };
+    }
+    if (/\b(?:availab|uptime|99|downtime|recover|backup|failover|reliab|crash)/i.test(t)) {
+      return { area: 'Reliability', manual: true, steps: ['Monitor the application with an uptime or monitoring tool over the agreed period', `Compare what was measured with the requirement: ${text}`] };
+    }
+    if (/\b(?:usab|easy|intuitive|user-friendly|friendly|consistent|clear|understand)/i.test(t)) {
+      return { area: 'Usability', manual: true, steps: ['Carry out the main flow as a first-time user would', `Confirm: ${text}`] };
+    }
+    if (/\b(?:encrypt|hash|password|audit|log(?:ged|s)?|permission|role|authori[sz])/i.test(t)) return { area: 'Security', manual: true, steps: ['Carry out the main flow', `Confirm with the team or in the system: ${text}`] };
+    return { area: 'General', manual: true, steps: ['Set up what the requirement describes', 'Carry out the main flow', `Confirm: ${text}`] };
+  };
+  uc.nonFunctional.forEach((text, i) => {
+    const said = text.replace(/[.;]+$/, '');
+    const r = nfr(said);
+    scenario(`Non-functional: ${r.area}`, 'Non-functional');
+    add({ title: `NFR${i + 1}: ${clip(said)}`, type: r.area, priority: r.area === 'Security' || r.area === 'Performance' ? 'High' : 'Medium', preconditions, manual: r.manual || undefined, steps: r.steps, expected: said });
+  });
+  // Checks every web page should pass, added when the use case does not state them. They are guesses, so marked "Assumed".
+  if (planned.length) {
+    const assumed = (area: string, title: string, steps: string[], expected: string) => {
+      scenario(`Non-functional: ${area}`, 'Non-functional');
+      add({ title, type: area, priority: 'Medium', basis: 'assumed', preconditions, steps, expected });
+    };
+    if (!covered.has('speed')) assumed('Performance', 'Page loads within 5 seconds', [...openSteps, 'Verify the page loads within 5 seconds'], 'The page is ready to use within 5 seconds');
+    if (pw && !covered.has('masked')) assumed('Security', `${pwName} is masked while typing`, [...untilPassword, `Verify the ${pwName} field is masked`], `What is typed in ${pwName} is hidden (shown as dots)`);
+    if (!covered.has('https')) assumed('Security', 'The page is served over HTTPS', [...openSteps, 'Verify the URL contains "https://"'], 'The address starts with https://, so data is encrypted on the way');
+    if (fields.length && !covered.has('labels')) assumed('Accessibility', 'Every field has a label', [...openSteps, 'Verify all fields have labels'], 'Each field has a label that people and screen readers can read');
+  }
+  const manualCount = cases.filter((c) => c.manual).length;
+  if (manualCount) notes.push(`${manualCount} case${manualCount === 1 ? ' is a manual check' : 's are manual checks'} (things a browser test cannot measure, such as uptime or account lockout). They are in the sheet for your testers and are skipped when you run the cases.`);
 
   const guessed = cases.filter((c) => c.basis === 'assumed').length;
   if (guessed) notes.push(`${guessed} case${guessed === 1 ? ' rests' : 's rest'} on assumptions: the use case does not say whether those fields are required or limited, so what should happen is a guess. They are marked "Assumed" in the sheet. If the app behaves differently and that is fine, change the last step or delete the case.`);

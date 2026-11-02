@@ -3,16 +3,19 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { aiConfigured, AI_MODEL, defaultClient, generate, improveSteps, AiError } from '../cases/ai.js';
-import { casesToRows, COLUMN_WIDTHS, detectMapping, FIELDS, hasHeaderRow, rowsToCases, type Mapping, type TestCase } from '../cases/model.js';
+import { CATEGORIES, casesToRows, COLUMN_WIDTHS, detectMapping, FIELDS, hasHeaderRow, rowsToCases, type Mapping, type TestCase } from '../cases/model.js';
 import { describeStep, parseStep } from '../cases/steps.js';
 import { writeCsv } from './csv.js';
 import { readSheet } from './sheets.js';
 import { SuiteStore, type Suite } from './suites.js';
 import { writeXlsx } from './xlsx.js';
+import { writeDocx } from './docx.js';
+import { cleanAnswers, DELIVERABLES, planCycles, strategyDefaults, strategyDocument, TEST_TYPES } from './strategy.js';
 import { randomBytes } from 'node:crypto';
 import { Auth, AuthError, clearCookie, cookie, COOKIE, sessionCookie, type User } from './auth.js';
 import { blockedReason } from '../exec/guard.js';
 import { decodeText } from '../cases/decode.js';
+import { DocumentError, readDocx, readPdf } from '../cases/documents.js';
 import { IntegrationError, Integrations, type Tool } from './integrations.js';
 import { cleanReport, Mobile } from './mobile.js';
 import { ApkError } from '../mobile/apk.js';
@@ -290,7 +293,16 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
           throw httpError(400, (e as Error).message);
         }
       }
-      if (/\.(docx?|pdf)$/i.test(filename)) throw httpError(400, 'Word and PDF files cannot be read here yet. Copy the text and paste it into the box.');
+      if (/\.(docx?|pdf)$/i.test(filename)) {
+        try {
+          const bytes = new Uint8Array(data);
+          const text = /\.pdf$/i.test(filename) ? await readPdf(bytes) : readDocx(bytes);
+          return json(res, 200, { text: text.slice(0, 60_000), cut: text.length > 60_000 });
+        } catch (e) {
+          if (e instanceof DocumentError) throw httpError(400, e.message);
+          throw e;
+        }
+      }
       return json(res, 200, { text: decodeText(new Uint8Array(data)) });
     }
 
@@ -337,12 +349,29 @@ export function createApp(opts: ServerOptions = {}): { server: Server; runs: Run
         res.writeHead(200, { 'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'content-disposition': `attachment; filename="${name}.xlsx"` });
         return res.end(Buffer.from(writeXlsx(rows, 'Test cases', COLUMN_WIDTHS)));
       }
+      if (action === 'strategy') {
+        // The proposed test strategy: questions with answers filled in from the cases, then a Word document.
+        const uc = sv.usecaseId ? suites.getUseCase(sv.usecaseId) : undefined;
+        const defaults = strategyDefaults(sv.title, sv.cases, uc?.body, sv.appUrl);
+        if (method === 'GET') return json(res, 200, { answers: defaults, testTypes: TEST_TYPES, deliverables: DELIVERABLES, cases: sv.cases.length });
+        if (method === 'POST') {
+          if (!sv.cases.length) throw httpError(400, 'This set has no test cases yet. Add some first, then prepare the strategy.');
+          const answers = cleanAnswers(await json_<unknown>(200_000), defaults);
+          if (url.searchParams.get('preview') === '1') {
+            return json(res, 200, { cycles: planCycles(sv.cases, answers).map((c) => ({ name: c.name, focus: c.focus, start: c.start, end: c.end, cases: c.cases.length })) });
+          }
+          const name = `Test_Strategy_${(answers.project || sv.title).replace(/[^\w.-]+/g, '_').slice(0, 60)}`;
+          const doc = writeDocx(strategyDocument(sv.title, sv.cases, answers), { title: `Test Strategy - ${answers.project}`, header: `Test Strategy - ${answers.project}${answers.release ? ` - ${answers.release}` : ''}`, author: answers.preparedBy || me.name || 'EasyTesting' });
+          res.writeHead(200, { 'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'content-disposition': `attachment; filename="${name}.docx"` });
+          return res.end(Buffer.from(doc));
+        }
+      }
       if (action === 'run' && method === 'POST') {
         const b = await json_<{ appUrl?: string; stopOnFail?: boolean; speed?: string }>(10_000);
         const appUrl = String(b.appUrl ?? sv.appUrl).trim();
         if (!/^https?:\/\/\S+$/i.test(appUrl)) throw httpError(400, 'Enter the app link, starting with http:// or https://');
-        const runnable = sv.cases.filter((c) => c.steps.length);
-        if (!runnable.length) throw httpError(400, 'None of these test cases has any steps to run.');
+        const runnable = sv.cases.filter((c) => c.steps.length && !c.manual);
+        if (!runnable.length) throw httpError(400, 'None of these test cases can run in a browser: they have no steps, or they are manual checks.');
         await mayRun(owner, appUrl);
         if (appUrl !== sv.appUrl) suites.update(sv.id, { appUrl });
         return json(res, 202, runs.createCases({ title: sv.title, appUrl, cases: sv.cases, owner, suite: sv.id, stopOnFail: !!b.stopOnFail, speed: b.speed === 'slow' || b.speed === 'very-slow' ? b.speed : 'normal' }));
@@ -583,7 +612,9 @@ function interpret(text: string) {
 }
 
 function suiteView(sv: Suite) {
-  return { ...sv, cases: sv.cases.map((c) => ({ ...c, interpreted: c.steps.map(interpret) })) };
+  // A manual case's steps are instructions for a person: nothing to read or run.
+  const byHand = (text: string) => ({ text, action: 'manual', confidence: 1, notes: [] as string[], needsValue: false, summary: 'Done by a person; not run by the tool' }) as unknown as ReturnType<typeof interpret>;
+  return { ...sv, cases: sv.cases.map((c) => ({ ...c, interpreted: c.steps.map(c.manual ? byHand : interpret) })) };
 }
 
 /** Keeps only the fields of a test case, with sizes limited, from whatever the client sent. */
@@ -596,7 +627,8 @@ function cleanCases(input: unknown): TestCase[] {
     while (seen.has(id.toLowerCase())) id += '-2';
     seen.add(id.toLowerCase());
     return {
-      id, title: str(c.title, 200) || id, area: str(c.area, 100) || undefined, priority: str(c.priority, 30) || undefined, type: str(c.type, 30) || undefined,
+      id, title: str(c.title, 200) || id, scenario: str(c.scenario, 200) || undefined, area: str(c.area, 100) || undefined,
+      category: CATEGORIES.find((k) => k === c.category), manual: c.manual === true || undefined, priority: str(c.priority, 30) || undefined, type: str(c.type, 30) || undefined,
       preconditions: str(c.preconditions, 1000) || undefined, steps: (Array.isArray(c.steps) ? c.steps : []).slice(0, 100).map((x) => str(x)).filter(Boolean),
       expected: str(c.expected, 1000), source: str(c.source, 200) || undefined, basis: c.basis === 'assumed' ? ('assumed' as const) : c.basis === 'stated' ? ('stated' as const) : undefined,
     };

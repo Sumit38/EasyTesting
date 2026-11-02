@@ -77,7 +77,7 @@ describe('rule-based generation', () => {
     assert.ok(wrong.steps.some((s) => /WrongPassword9!/.test(s)));
     assert.equal(wrong.steps.at(-1), 'Verify "Invalid credentials" is displayed');
     assert.equal(wrong.expected, 'The message "Invalid credentials" is shown');
-    assert.deepEqual(new Set(out.cases.map((c) => c.type)), new Set(['Positive', 'Negative', 'Boundary', 'Alternate']));
+    assert.deepEqual(new Set(out.cases.filter((c) => c.category !== 'Non-functional').map((c) => c.type)), new Set(['Positive', 'Negative', 'Boundary', 'Alternate']));
   });
 
   it('negative cases stop before the success checks', () => {

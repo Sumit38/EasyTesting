@@ -126,6 +126,8 @@
       if (h === 'mobile') { showView('view-mobile'); setNav('mobile'); await renderMobile(); return true; }
       const m = h.match(/^suite\/(\d+)$/);
       if (m) { showView('view-suite'); setNav('cases'); await renderSuite(m[1]); return true; }
+      const sm = h.match(/^suite\/(\d+)\/strategy$/);
+      if (sm) { showView('view-suite'); setNav('cases'); await renderStrategy(sm[1]); return true; }
     } catch (e) { fail(e); }
     return false;
   });
@@ -171,12 +173,13 @@
         el('input', { type: 'radio', name: 'method', value: v, checked: method === v, disabled: !enabled, onchange: () => { method = v; paint(); } }), el('div', {}, el('b', { text: t }), el('span', { text: d })))));
     };
     paint();
-    const file = el('input', { type: 'file', accept: '.txt,.md,.csv,.xlsx', class: 'hidden', onchange: async () => {
+    const file = el('input', { type: 'file', accept: '.txt,.md,.csv,.xlsx,.docx,.pdf', class: 'hidden', onchange: async () => {
       const f = file.files[0];
       if (!f) return;
       try {
         const out = await api('/usecases/read?filename=' + encodeURIComponent(f.name), { method: 'POST', body: f }).then(parse);
         body.value = out.text;
+        if (out.cut) toast('That document is long: only its first 60,000 characters were taken. Split it into several use cases if something is missing.');
         if (!title.value) title.value = f.name.replace(/\.[^.]+$/, '');
       } catch (e) { fail(e); }
     } });
@@ -196,7 +199,7 @@
     };
     box.replaceChildren(
       el('div', { class: 'hero' }, el('h1', {}, 'Describe the use case. ', el('em', { text: 'Get test cases.' })),
-        el('p', { text: 'Paste it or upload a text, Markdown, CSV or Excel file. You review the generated cases, download them, and run them when you are ready.' })),
+        el('p', { text: 'Paste it or upload a Word, PDF, text, Markdown, CSV or Excel file. We write functional, field validation and non-functional test cases. You review them, download them as Excel, and run them when you are ready.' })),
       el('section', { class: 'card' },
         el('h2', {}, el('span', { class: 'n', text: '1' }), 'Your use case'),
         el('p', { class: 'sub', text: 'Headings such as Main Flow, Alternate Flows, Business Rules and Given/When/Then are recognised. Plain sentences work too.' }),
@@ -233,10 +236,13 @@
   }
 
   /* ---------- upload wizard ---------- */
-  const FIELD_LABEL = { id: 'ID', title: 'Title', area: 'Area / module', priority: 'Priority', type: 'Type', preconditions: 'Preconditions', steps: 'Steps (required)', expected: 'Expected result', basis: 'Basis (stated / assumed)' };
+  const FIELD_LABEL = { id: 'Test case ID', scenario: 'Scenario name', title: 'Test case name', category: 'Requirement type', manual: 'Execution (manual / automated)', area: 'Area / module', priority: 'Priority', type: 'Type', preconditions: 'Preconditions', steps: 'Steps (required)', expected: 'Expected result', basis: 'Basis (stated / assumed)' };
   const FIELD_HELP = {
     id: 'The test case number, for example TC-01. If your file has none, choose (none) and we number the cases for you.',
     title: 'The short name of the test case, for example "Log in with a wrong password". Shown in the results and reports.',
+    scenario: 'The scenario or feature the case belongs to, for example "Login - Field validation: Email". Optional: it groups the cases in the sheet.',
+    category: 'Functional, Field validation or Non-functional. Optional: says which kind of requirement the case covers.',
+    manual: 'Only if your sheet marks some cases as Manual: those are listed but not run by the tool. Leave it on (none) otherwise.',
     area: 'Which part of the app the case tests, for example Login or Checkout. Optional: it groups the results.',
     priority: 'High, Medium or Low. Optional: a failure in a High case becomes a high-severity bug in the report.',
     type: 'Positive, Negative, Boundary and so on. Optional: shown as a label on each case.',
@@ -339,7 +345,7 @@
   }
 
   /* ---------- review, edit, download and run one set ---------- */
-  const strip = (suite) => suite.cases.map((c) => ({ id: c.id, title: c.title, area: c.area, priority: c.priority, type: c.type, preconditions: c.preconditions, steps: c.steps, expected: c.expected, source: c.source }));
+  const strip = (suite) => suite.cases.map((c) => ({ id: c.id, scenario: c.scenario, title: c.title, area: c.area, category: c.category, manual: c.manual, priority: c.priority, type: c.type, preconditions: c.preconditions, steps: c.steps, expected: c.expected, source: c.source, basis: c.basis }));
 
   async function renderSuite(id) {
     const suite = await get('/suites/' + id);
@@ -354,6 +360,7 @@
   function paintRead(box, st, caseId, index) {
     box.replaceChildren();
     if (!st.text.trim()) { box.append(el('span', { text: 'Write what should happen in this step.' })); return; }
+    if (st.action === 'manual') { box.append(el('span', { class: 'tag', text: 'by hand' }), el('span', { text: st.summary })); return; }
     box.append(el('span', { class: 'tag', text: st.action === 'unknown' ? 'not understood' : st.action }), el('span', { text: st.action === 'unknown' ? (st.notes[0] || '') : st.summary }), confPill(st.confidence));
     if (st.action !== 'unknown') for (const n of st.notes.slice(0, 1)) box.append(el('span', { text: '· ' + n }));
     if (st.confidence < 0.6 && ai.available) {
@@ -389,7 +396,7 @@
       try {
         const out = await send('/steps/interpret', { steps: sent });
         if (ticket !== S.tickets[c.id] || S.suite.cases.indexOf(c) === -1) return;
-        c.interpreted = out.steps;
+        c.interpreted = c.manual ? out.steps.map((x) => ({ ...x, action: 'manual', confidence: 1, notes: [], summary: 'Done by a person; not run by the tool' })) : out.steps;
         repaintCase(c);
       } catch { /* try again on the next keystroke */ }
     }, 300);
@@ -415,6 +422,7 @@
     if (!slot) return;
     const steps = filledSteps(c);
     const weak = steps.filter((s) => s.confidence < 0.6).length;
+    if (c.manual) return slot.replaceChildren(el('span', { class: 'pill', title: 'A person does this check; the tool does not run it', text: 'by hand' }));
     slot.replaceChildren(!steps.length ? el('span', { class: 'pill low', text: 'no steps' }) : weak ? el('span', { class: 'pill mid', text: weak + ' to check' }) : confPill(mean(steps.map((s) => s.confidence))));
   }
 
@@ -477,19 +485,21 @@
     const expected = el('textarea', { rows: 2, placeholder: 'What should happen overall?' });
     expected.value = c.expected || '';
     expected.oninput = () => { c.expected = expected.value; markDirty(); };
+    const scen = el('input', { type: 'text', value: c.scenario || '', placeholder: 'e.g. Login - Field validation: Email' });
+    scen.oninput = () => { c.scenario = scen.value; markDirty(); };
     const pre = el('textarea', { rows: 1, placeholder: 'Anything that must be true before step 1' });
     pre.value = c.preconditions || '';
     pre.oninput = () => { c.preconditions = pre.value; markDirty(); };
     d.append(
-      el('summary', {}, el('b', { text: c.id }), el('span', { text: c.title }), c.type ? el('span', { class: 'pill', text: c.type }) : null, c.priority ? el('span', { class: 'pill', text: c.priority }) : null, c.basis === 'assumed' ? el('span', { class: 'pill mid', title: 'The use case does not say what should happen here, so the expected result is a guess.', text: 'assumed' }) : null,
+      el('summary', {}, el('b', { text: c.id }), el('span', { text: c.title }), c.category ? el('span', { class: 'pill cat', title: 'The kind of requirement this case covers', text: c.category }) : null, c.manual ? el('span', { class: 'pill mid', title: 'A person does this check by hand. It is in the Excel sheet but is not run by the tool.', text: 'manual' }) : null, c.type ? el('span', { class: 'pill', text: c.type }) : null, c.priority ? el('span', { class: 'pill', text: c.priority }) : null, c.basis === 'assumed' ? el('span', { class: 'pill mid', title: 'The use case does not say what should happen here, so the expected result is a guess.', text: 'assumed' }) : null,
         el('span', { class: 'spacer' }), (S.badges[c.id] = el('span'))),
-      el('div', { class: 'body2' }, field('Title', title), c.preconditions !== undefined || true ? field('Before you start', pre) : null, el('div', {}, el('b', { text: 'Steps' }), stepsBox),
+      el('div', { class: 'body2' }, field('Scenario name', scen), field('Test case name', title), field('Precondition', pre), el('div', {}, el('b', { text: 'Steps' }), stepsBox),
         el('div', { class: 'row' }, el('button', { class: 'btn', text: '+ Add a step', onclick: () => {
           c.steps.push(''); c.interpreted.push({ text: '', action: 'unknown', confidence: 0, notes: [], summary: '' }); markDirty(); drawSteps(); repaintCase(c);
           const inputs = stepsBox.querySelectorAll('input'); if (inputs.length) inputs[inputs.length - 1].focus();
         } }),
           el('span', { class: 'spacer' }), el('button', { class: 'btn danger', text: 'Delete this test case', onclick: () => { if (confirm('Delete ' + c.id + '?')) { S.suite.cases = S.suite.cases.filter((x) => x !== c); markDirty(); drawSuite(); } } })),
-        field('Expected result', expected)));
+        field('Expected results', expected)));
     paintCaseBadge(c);
     return d;
   }
@@ -605,6 +615,111 @@
       groups.length > shown.length ? el('button', { class: 'btn', text: `Show all ${groups.length}`, onclick: () => { S.allGaps = true; drawSuite(); } }) : null);
   }
 
+  /* ---------- proposed test strategy ---------- */
+  /** Questions for the test strategy, most of them answered from the test cases; the answers become a Word document. */
+  async function renderStrategy(id) {
+    const box = $('view-suite');
+    box.replaceChildren(el('p', { class: 'hint', text: 'Loading…' }));
+    const [suite, info] = await Promise.all([get(`/suites/${id}`), get(`/suites/${id}/strategy`)]);
+    const key = `et-strategy-${id}`;
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch { /* storage off */ }
+    const A = { ...info.answers, ...saved };
+    const inputs = {};
+    const area = (k, rows = 4, placeholder = '') => (inputs[k] = el('textarea', { rows, placeholder, value: A[k] ?? '' }));
+    const line = (k, placeholder = '') => (inputs[k] = text(placeholder, A[k] ?? ''));
+    const num = (k, min, max) => (inputs[k] = el('input', { type: 'number', min, max, step: 1, value: A[k] ?? '' }));
+    const checks = (k, options) => {
+      inputs[k] = options.map((o) => el('input', { type: 'checkbox', value: o, checked: (A[k] || []).includes(o) }));
+      return el('div', { class: 'checks' }, ...inputs[k].map((c) => el('label', { class: 'check' }, c, ' ' + c.value)));
+    };
+    const collect = () => {
+      const out = {};
+      for (const [k, v] of Object.entries(inputs)) {
+        if (Array.isArray(v)) out[k] = v.filter((c) => c.checked).map((c) => c.value);
+        else if (k === 'automation') out[k] = v.value;
+        else out[k] = ['cycles', 'cycleDays', 'gapDays', 'passRate'].includes(k) ? Number(v.value) : v.value;
+      }
+      return out;
+    };
+    inputs.automation = el('select', {},
+      el('option', { value: 'easytesting', text: 'Automated with EasyTesting, plus the manual checks by hand', selected: A.automation !== 'manual' }),
+      el('option', { value: 'manual', text: 'All by hand (manual testing only)', selected: A.automation === 'manual' }));
+    inputs.startDate = el('input', { type: 'date', value: A.startDate || '' });
+    inputs.cycles = el('select', {}, ...[1, 2, 3, 4, 5, 6].map((n) => el('option', { value: n, text: n === 1 ? '1 cycle' : n + ' cycles', selected: Number(A.cycles) === n })));
+    const tool = line('defectTool', 'Jira');
+    tool.setAttribute('list', 'defectTools');
+
+    const preview = el('div', { class: 'plan-preview' });
+    let pt = 0;
+    const showPlan = () => {
+      clearTimeout(pt);
+      pt = setTimeout(async () => {
+        try {
+          const out = await send(`/suites/${id}/strategy?preview=1`, collect());
+          const d = (s) => new Date(s + 'T00:00:00Z').toLocaleDateString([], { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+          preview.replaceChildren(el('table', { class: 'plan' },
+            el('tr', {}, el('th', { text: 'Cycle' }), el('th', { text: 'Dates' }), el('th', { text: 'Focus' }), el('th', { text: 'Cases' })),
+            ...out.cycles.map((c) => el('tr', {}, el('td', { text: c.name }), el('td', { text: `${d(c.start)} – ${d(c.end)}` }), el('td', { text: c.focus }), el('td', { text: String(c.cases) })))));
+        } catch (e) { preview.replaceChildren(el('div', { class: 'note', text: e.message })); }
+      }, 250);
+    };
+    let st = 0;
+    const remember = () => { clearTimeout(st); st = setTimeout(() => { try { localStorage.setItem(key, JSON.stringify(collect())); } catch { /* storage off */ } }, 300); };
+
+    const q = (n, question, hint, ...body) => el('section', { class: 'card q' }, el('h3', {}, el('span', { class: 'qn', text: String(n) }), question), hint ? el('p', { class: 'hint', text: hint }) : null, ...body);
+    const grid = (...kids) => el('div', { class: 'qgrid' }, ...kids);
+    const download = el('button', { class: 'btn primary', text: '⬇ Download the test strategy (Word)' });
+    download.onclick = async () => {
+      download.disabled = true; download.textContent = 'Preparing…';
+      try {
+        const res = await api(`/suites/${id}/strategy`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(collect()) });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not prepare the document.');
+        const name = ((res.headers.get('content-disposition') || '').match(/filename="([^"]+)"/) || [])[1] || 'Test_Strategy.docx';
+        el('a', { href: URL.createObjectURL(await res.blob()), download: name }).click();
+        toast('Downloaded ' + name + '. Open it in Word to review and share.');
+      } catch (e) { fail(e); }
+      download.disabled = false; download.textContent = '⬇ Download the test strategy (Word)';
+    };
+
+    const page = el('div', { class: 'strategy' },
+      el('p', { class: 'crumb' }, el('a', { href: `#/suite/${id}`, text: '← Back to ' + suite.title })),
+      el('h2', { text: 'Proposed test strategy' }),
+      el('p', { class: 'hint', text: `Answer the questions below and download a test strategy for these ${info.cases} test cases as a Word document, with a cycle-by-cycle plan. Most answers are filled in from the test cases and the use case: change anything that is not right for your project. Your answers are kept in this browser.` }),
+      el('datalist', { id: 'defectTools' }, ...['Jira', 'Azure DevOps', 'EasyTesting bug list', 'Bugzilla', 'ServiceNow'].map((v) => el('option', { value: v }))),
+      q(1, 'What is being tested?', '', grid(
+        field('Project or application', line('project')), field('Release', line('release', 'Release 1.0')),
+        field('Document version', line('version', '1.0')), field('Prepared by', line('preparedBy', 'Your name')), field('Approved by', line('approvedBy', 'Test manager or product owner')))),
+      q(2, 'What should testing achieve?', 'The objective, in one or two sentences.', area('objective', 3)),
+      q(3, 'What is in scope, and what is not?', 'One item per line.', grid(field('In scope', area('inScope', 6)), field('Out of scope', area('outOfScope', 6)))),
+      q(4, 'Which kinds of testing are needed?', 'Ticked from what the test cases cover. Add any others the release needs.', checks('testTypes', info.testTypes)),
+      q(5, 'Where will it be tested?', '', grid(
+        field('Environments', area('environments', 3, 'QA - https://qa.example.com'), 'One per line: name - link'),
+        field('Browsers and devices', area('browsers', 3), 'One per line')),
+        field('Test data', area('testData', 2))),
+      q(6, 'How many test cycles, and when?', 'Working days only: weekends are skipped. The gap between cycles is for fixes and a new build.', grid(
+        field('First cycle starts on', inputs.startDate), field('Number of test cycles', inputs.cycles),
+        field('Working days per cycle', num('cycleDays', 1, 30)), field('Working days between cycles', num('gapDays', 0, 10))), preview),
+      q(7, 'How will the test cases be run?', '', field('Execution', inputs.automation)),
+      q(8, 'Who is in the team?', 'One person or role per line: Role | Name | Responsibilities. Leave the name empty if not known yet.', area('team', 5)),
+      q(9, 'When can testing start, and when is it done?', 'One criterion per line.', grid(field('Entry criteria', area('entry', 5)), field('Exit criteria', area('exit', 5))),
+        field('Pass rate needed to go live (%)', num('passRate', 50, 100))),
+      q(10, 'Where are defects logged?', '', field('Defect tool', tool)),
+      q(11, 'What could go wrong?', 'One risk per line: Risk | Mitigation.', field('Risks', area('risks', 5)), field('Assumptions and dependencies', area('assumptions', 3))),
+      q(12, 'What will be handed over?', '', checks('deliverables', info.deliverables)),
+      el('div', { class: 'row', style: 'margin-top:16px; gap:10px' }, download,
+        el('button', { class: 'btn', text: 'Start again from the test cases', title: 'Forget your answers and fill them in again from the test cases', onclick: () => {
+          if (!confirm('Forget your answers and start again?')) return;
+          try { localStorage.removeItem(key); } catch { /* storage off */ }
+          renderStrategy(id);
+        } })));
+    box.replaceChildren(page);
+    page.addEventListener('input', remember);
+    page.addEventListener('change', remember);
+    for (const k of ['startDate', 'cycles', 'cycleDays', 'gapDays', 'passRate']) inputs[k].addEventListener('change', showPlan);
+    showPlan();
+  }
+
   function drawSuite() {
     const box = $('view-suite');
     const s = S.suite;
@@ -664,7 +779,8 @@
       el('p', { class: 'crumb' }, el('a', { href: '#/cases', text: '← All test cases' })),
       el('div', { class: 'suite-head' }, title, el('span', { class: 'badge b-' + (s.source === 'generated' ? 'info' : 'ok'), text: s.source }),
         el('button', { class: 'btn', text: '⬇ Excel', onclick: () => downloadBlob(`/suites/${s.id}/download?format=xlsx`, s.title.replace(/[^\w.-]+/g, '_') + '.xlsx') }),
-        el('button', { class: 'btn', text: '⬇ CSV', onclick: () => downloadBlob(`/suites/${s.id}/download?format=csv`, s.title.replace(/[^\w.-]+/g, '_') + '.csv') })),
+        el('button', { class: 'btn', text: '⬇ CSV', onclick: () => downloadBlob(`/suites/${s.id}/download?format=csv`, s.title.replace(/[^\w.-]+/g, '_') + '.csv') }),
+        el('button', { class: 'btn', text: '📋 Test strategy', title: 'Answer a few questions and download a proposed test strategy with a cycle-by-cycle plan, as a Word document', onclick: () => { if (S.dirty && !confirm('You have unsaved changes. The strategy uses the saved test cases. Carry on?')) return; location.hash = `#/suite/${s.id}/strategy`; } })),
       ...notes,
       el('div', { class: 'tiles', id: 'suiteTiles' }),
       gapsPanel(),

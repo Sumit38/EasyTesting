@@ -5,7 +5,7 @@
  */
 
 export type Action = 'open' | 'click' | 'type' | 'clear' | 'select' | 'check' | 'uncheck' | 'hover' | 'press' | 'wait' | 'verify' | 'refresh' | 'back' | 'scroll' | 'unknown';
-export type Check = 'visible' | 'hidden' | 'no-text' | 'enabled' | 'disabled' | 'checked' | 'unchecked' | 'text' | 'title' | 'url' | 'page' | 'value' | 'message' | 'no-message' | 'readonly' | 'editable';
+export type Check = 'visible' | 'hidden' | 'no-text' | 'enabled' | 'disabled' | 'checked' | 'unchecked' | 'text' | 'title' | 'url' | 'page' | 'value' | 'message' | 'no-message' | 'readonly' | 'editable' | 'loadtime' | 'masked' | 'labels';
 
 export interface ParsedStep {
   raw: string;
@@ -89,7 +89,7 @@ export function cleanTarget(phrase: string): { target: string; hint?: string } {
 const STATE: Record<string, Check> = {
   displayed: 'visible', shown: 'visible', visible: 'visible', present: 'visible', appears: 'visible', appear: 'visible', appeared: 'visible', enabled: 'enabled', disabled: 'disabled', hidden: 'hidden',
   'not displayed': 'hidden', 'not visible': 'hidden', 'not shown': 'hidden', 'not present': 'hidden', absent: 'hidden', selected: 'checked', checked: 'checked', unchecked: 'unchecked', 'not checked': 'unchecked',
-  'read-only': 'readonly', readonly: 'readonly', editable: 'editable', active: 'visible',
+  'read-only': 'readonly', readonly: 'readonly', editable: 'editable', active: 'visible', masked: 'masked', 'hidden as dots': 'masked',
 };
 const STATE_WORDS = Object.keys(STATE).sort((a, b) => b.length - a.length).join('|');
 
@@ -151,6 +151,15 @@ function readStep(input: string): ParsedStep {
     const key = m[1].toLowerCase().replace(/\s+/g, '');
     const map: Record<string, string> = { return: 'Enter', enter: 'Enter', esc: 'Escape', escape: 'Escape', space: 'Space', spacebar: 'Space', tab: 'Tab', backspace: 'Backspace', delete: 'Delete', home: 'Home', end: 'End', pageup: 'PageUp', pagedown: 'PageDown', arrowup: 'ArrowUp', arrowdown: 'ArrowDown', arrowleft: 'ArrowLeft', arrowright: 'ArrowRight' };
     return step(raw, { action: 'press', value: map[key] ?? key.toUpperCase(), confidence: 0.96 });
+  }
+
+  // ---- close a pop-up -----------------------------------------------------------
+  // Before the checks: "Close the login popup if it is displayed" is an action, not a check.
+  if (closesPopup(s)) {
+    return step(raw, {
+      action: 'click', target: 'Close', hint: 'close', confidence: 0.93,
+      notes: ['Closes the pop-up on top of the page with its ✕ or close button. If no pop-up shows up this time, nothing is clicked and the case carries on.'],
+    });
   }
 
   // ---- verify ----------------------------------------------------------------
@@ -284,8 +293,36 @@ function readStep(input: string): ParsedStep {
   });
 }
 
+/** Words for the thing a pop-up is: "the login popup", "the cookie banner", "the offer dialog". */
+const POPUP_THING = String.raw`(?:[\w'-]+\s+){0,4}?(?:pop-?\s?ups?|modals?(?:\s+window)?|dialog(?:ue)?s?(?:\s+box)?|overlays?|lightbox|prompts?|interstitials?|banners?|windows?|notifications?|(?:login|sign-?\s?in|sign-?\s?up|offer|promo|cookie|consent|newsletter)\s+(?:box|bar|screen|form))`;
+const CROSS = String.raw`(?:cross|close|x|✕|✖|×|╳|dismiss|"(?:x|✕|✖|×)"|'(?:x|✕|✖|×)')`;
+const WHEN_SHOWN = String.raw`(?:\s*,?\s*(?:if|when|in case|whenever)\s+(?:it\s+|one\s+|any\s+)?(?:is\s+|gets\s+)?(?:appears?|shown|shows(?:\s+up)?|displayed|present|visible|opens?|pops?\s+up)\b.*)?`;
+const HOW = String.raw`(?:\s+(?:by\s+)?(?:clicking|tapping|pressing|using|with|via)\s+.*)?`;
+const CLOSE_PHRASES = [
+  // "Close the login popup", "Dismiss the cookie banner if it appears", "Skip the popup by clicking the cross"
+  new RegExp(String.raw`^(?:close|dismiss|skip|cancel|exit|hide|shut|get rid of)\s+(?:the\s+|a\s+|any\s+|this\s+|that\s+)?${POPUP_THING}${WHEN_SHOWN}${HOW}${WHEN_SHOWN}$`, 'i'),
+  // "Click on the cross sign", "Tap the X icon on the popup", "Click the close button of the login dialog", "Click ✕"
+  new RegExp(String.raw`^(?:click|tap|press|hit|select|use)\s+(?:on\s+)?(?:the\s+|a\s+)?${CROSS}(?:\s+(?:sign|icon|mark|button|symbol|link|btn))?(?:\s+(?:on|of|in|at|from|to\s+(?:close|skip|dismiss|exit|hide|cancel))\s+(?:the\s+)?.+?)?${WHEN_SHOWN}$`, 'i'),
+];
+
+/** True when a step means "close the pop-up", however it is put. */
+export function closesPopup(step: string): boolean {
+  const s = step.replace(/\s+/g, ' ').trim().replace(/\.$/, '');
+  return CLOSE_PHRASES.some((re) => re.test(s));
+}
+
 function parseVerify(raw: string, r: string): ParsedStep {
   let m: RegExpMatchArray | null;
+  // How fast the page loads: "the page loads within 3 seconds", "page load time is under 2 s"
+  if ((m = r.match(/^(?:the\s+)?(?:[\w-]+\s+){0,3}?(?:page|screen|site|website|application|app)\s+(?:loads?|opens?|is loaded|is displayed|responds?|appears?|load time is|loading time is)\s+(?:with)?in\s+(?:under\s+|less than\s+)?(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|milliseconds?|ms)$/i))
+    || (m = r.match(/^(?:the\s+)?(?:page\s+)?load(?:ing)?\s+time\s+(?:is\s+)?(?:under|less than|below|within|at most|<=?)\s+(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|milliseconds?|ms)$/i))) {
+    const ms = /^m/i.test(m[2]) ? Number(m[1]) : Number(m[1]) * 1000;
+    return step(raw, { action: 'verify', check: 'loadtime', value: String(Math.round(ms)), confidence: 0.94, notes: ['Measures how long the page that is open took to load, from the timing the browser keeps.'] });
+  }
+  // Every field can be told apart by a person and a screen reader.
+  if (/^(?:all|every|each)\s+(?:the\s+)?(?:form\s+)?(?:fields?|inputs?|input fields?|text ?boxes?)\s+(?:on the page\s+)?(?:have|has)\s+(?:a\s+)?(?:visible\s+|proper\s+|clear\s+)?labels?$/i.test(r)) {
+    return step(raw, { action: 'verify', check: 'labels', confidence: 0.93 });
+  }
   // "X does not appear", "X should not be shown", "X is no longer visible", "X disappears" all mean X is absent.
   if ((m = r.match(/^(.+?)\s+(?:does not|doesn't|do not|don't|did not|should not|shouldn't|must not|will not|won't|never)\s+(?:appear|display|show(?: up)?|exist|be (?:shown|displayed|visible|present|there)|remain|stay)\b.*$/i))
     || (m = r.match(/^(.+?)\s+(?:is|are) no longer\s+(?:displayed|shown|visible|present|there|available)$/i))
@@ -364,7 +401,7 @@ export function describeStep(p: ParsedStep): string {
   const t = p.target ? `“${p.target}”${p.hint ? ` ${p.hint}` : ''}` : '';
   switch (p.action) {
     case 'open': return p.value ? `Open ${p.value}` : p.target ? `Go to the ${p.target} page` : 'Open the app';
-    case 'click': return `Click ${t}`;
+    case 'click': return p.hint === 'close' ? 'Close the pop-up (✕), if one is showing' : `Click ${t}`;
     case 'type': return `Type ${JSON.stringify(p.value ?? '')} into ${t}`;
     case 'clear': return `Clear ${t}`;
     case 'select': return `Choose ${JSON.stringify(p.value ?? '')} in ${t}`;
@@ -386,6 +423,9 @@ export function describeStep(p: ParsedStep): string {
       if (c === 'message') return `Check a${p.kind === 'error' ? 'n' : ''} ${p.kind} message appears`;
       if (c === 'no-message') return `Check no ${p.kind} message appears`;
       if (c === 'value') return `Check ${t} holds ${JSON.stringify(p.value ?? '')}`;
+      if (c === 'loadtime') return `Check the page loaded within ${Number(p.value) / 1000}s`;
+      if (c === 'labels') return 'Check every field has a label';
+      if (c === 'masked') return `Check ${t} hides what is typed`;
       return `Check ${t} is ${c}`;
     }
     default: return 'Not understood';
